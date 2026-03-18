@@ -1,0 +1,15 @@
+{
+  "name": "webb-root",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev:backend": "python -m uvicorn backend.main:app --port 8000",
+    "dev:frontend": "cd frontend && npm run dev -- --host=127.0.0.1 --port=5173",
+    "dev:electron": "cd electron && set NODE_ENV=development&& npm start",
+    "dev": "concurrently -n backend,frontend,electron -c green,cyan,magenta \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:electron\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
+

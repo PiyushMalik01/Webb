@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+SQLAlchemy
+pydantic
+python-dotenv
+pyserial
+SpeechRecognition
+pyaudio
+pynput
+openai

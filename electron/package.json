@@ -1,0 +1,14 @@
+{
+  "name": "webb-electron",
+  "private": true,
+  "version": "0.0.0",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^34.2.0"
+  }
+}
+

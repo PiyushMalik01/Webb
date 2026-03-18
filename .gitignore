@@ -1,0 +1,24 @@
+## Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+## Local env/secrets
+backend/.env
+.env
+
+## Databases
+*.db
+
+## Node / Electron
+node_modules/
+frontend/node_modules/
+electron/node_modules/
+frontend/dist/
+
+## OS / tooling
+.DS_Store
+Thumbs.db
+*.log
