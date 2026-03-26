@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 
 from dotenv import load_dotenv
@@ -14,6 +15,10 @@ from .routes.webb import router as webb_router
 from .routes.voice import router as voice_router
 from .routes.notifications import router as notifications_router
 from .idle_manager import idle_manager
+from .notifications_hub import hub
+from .reminder_scheduler import reminder_check_loop
+from .routes.timer import shutdown_timer_background
+from .serial_manager import get_serial_manager
 
 
 def create_app() -> FastAPI:
@@ -33,9 +38,28 @@ def create_app() -> FastAPI:
     )
 
     @app.on_event("startup")
-    def _startup() -> None:
+    async def _startup() -> None:
         Base.metadata.create_all(bind=engine)
+        hub.bind_loop(asyncio.get_running_loop())
+
+        if not os.getenv("OPENAI_API_KEY"):
+            print("[webb] warning: OPENAI_API_KEY is not set; voice and AI nudges will fall back.")
+
         idle_manager.start()
+        app.state.reminder_task = asyncio.create_task(reminder_check_loop())
+
+    @app.on_event("shutdown")
+    async def _shutdown() -> None:
+        reminder_task = getattr(app.state, "reminder_task", None)
+        if reminder_task is not None:
+            reminder_task.cancel()
+            try:
+                await reminder_task
+            except asyncio.CancelledError:
+                pass
+        idle_manager.stop()
+        await shutdown_timer_background()
+        get_serial_manager().close()
 
     app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
     app.include_router(reminders_router, prefix="/api/reminders", tags=["reminders"])
