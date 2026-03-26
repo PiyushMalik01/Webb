@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { apiGet, apiSend } from '../lib/api'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import confetti from 'canvas-confetti'
+import { apiGet, apiSend, apiWsUrl } from '../lib/api'
 import type { TimerStatus } from '../lib/types'
 
 function formatSeconds(total: number) {
@@ -12,11 +13,24 @@ export function TimerPage() {
   const [status, setStatus] = useState<TimerStatus>({ state: 'idle', seconds_remaining: 0, duration_seconds: 0 })
   const [minutes, setMinutes] = useState(25)
   const [err, setErr] = useState<string | null>(null)
+  const [sessions, setSessions] = useState(0)
+  const wasRunning = useRef(false)
 
   const progress = useMemo(() => {
     if (status.duration_seconds <= 0) return 0
     return 1 - status.seconds_remaining / status.duration_seconds
   }, [status.duration_seconds, status.seconds_remaining])
+
+  useEffect(() => {
+    if (wasRunning.current && status.state === 'idle' && status.seconds_remaining === 0 && status.duration_seconds === 0) {
+      setSessions((n) => n + 1)
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } })
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Webb', { body: 'Pomodoro complete!' })
+      }
+    }
+    wasRunning.current = status.state === 'running'
+  }, [status])
 
   useEffect(() => {
     let cancelled = false
@@ -33,40 +47,32 @@ export function TimerPage() {
 
     bootstrap()
 
-    const ws = new WebSocket('ws://127.0.0.1:8000/api/timer/ws')
+    const ws = new WebSocket(apiWsUrl('/api/timer/ws'))
     ws.onmessage = (ev) => {
       try {
         const next = JSON.parse(ev.data) as TimerStatus
         if (!cancelled) setStatus(next)
-      } catch {
-        // ignore
-      }
-    }
-    ws.onerror = () => {
-      // fallback polling
+      } catch { /* ignore */ }
     }
 
     const poll = window.setInterval(() => {
       apiGet<TimerStatus>('/api/timer/status')
-        .then((s) => {
-          if (!cancelled) setStatus(s)
-        })
+        .then((s) => { if (!cancelled) setStatus(s) })
         .catch(() => {})
     }, 3000)
 
     return () => {
       cancelled = true
       window.clearInterval(poll)
-      try {
-        ws.close()
-      } catch {
-        // ignore
-      }
+      try { ws.close() } catch { /* ignore */ }
     }
   }, [])
 
   async function start() {
     setErr(null)
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission()
+    }
     const s = await apiSend<TimerStatus>('/api/timer/start', { method: 'POST', body: { duration_minutes: minutes } })
     setStatus(s)
   }
@@ -86,18 +92,16 @@ export function TimerPage() {
   const dash = circumference * (1 - progress)
 
   return (
-    <div>
+    <div className="enter-up">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Timer</h1>
+        <h1 className="text-2xl font-bold">Timer</h1>
         <div className="flex items-center gap-2">
           {[25, 50].map((m) => (
             <button
               key={m}
               onClick={() => setMinutes(m)}
-              className={[
-                'rounded-lg px-3 py-1.5 text-sm font-medium transition',
-                minutes === m ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
-              ].join(' ')}
+              className={minutes === m ? 'btn-primary' : 'btn-ghost'}
+              style={{ padding: '4px 12px', fontSize: '0.8125rem' }}
             >
               {m}m
             </button>
@@ -108,58 +112,63 @@ export function TimerPage() {
             max={240}
             value={minutes}
             onChange={(e) => setMinutes(Number(e.target.value))}
-            className="w-20 rounded-lg border border-gray-200 px-3 py-1.5 text-sm"
+            className="field-control w-20 px-3 py-1.5 text-sm"
           />
         </div>
       </div>
 
-      <div className="mt-8 flex items-center justify-center">
-        <div className="relative">
+      <div className="card mt-8 px-4 py-8">
+        <div className="relative mx-auto flex max-w-md items-center justify-center">
           <svg width="240" height="240" viewBox="0 0 240 240">
-            <circle cx="120" cy="120" r={radius} className="stroke-gray-100" strokeWidth="14" fill="none" />
+            <circle cx="120" cy="120" r={radius} stroke="var(--bg-elevated)" strokeWidth="14" fill="none" />
             <circle
               cx="120"
               cy="120"
               r={radius}
-              className="stroke-indigo-600"
+              stroke="var(--accent-color)"
               strokeWidth="14"
               fill="none"
               strokeLinecap="round"
               strokeDasharray={circumference}
               strokeDashoffset={dash}
               transform="rotate(-90 120 120)"
+              style={{ transition: 'stroke-dashoffset 1s linear' }}
             />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <div className="text-5xl font-semibold tracking-tight">{formatSeconds(status.seconds_remaining)}</div>
-            <div className="mt-2 text-sm text-gray-500">{status.state.toUpperCase()}</div>
+            <div className="text-5xl font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+              {formatSeconds(status.seconds_remaining)}
+            </div>
+            <div
+              className="mt-2 rounded-full px-3 py-1 text-xs font-semibold tracking-wide"
+              style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}
+            >
+              {status.state.toUpperCase()}
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="mt-8 flex justify-center gap-3">
-        <button
-          onClick={() => start().catch((e) => setErr(String(e)))}
-          className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-700"
-        >
-          Start
-        </button>
-        <button
-          onClick={() => pause().catch((e) => setErr(String(e)))}
-          className="rounded-lg bg-gray-100 px-5 py-2.5 text-sm font-medium text-gray-900 hover:bg-gray-200"
-        >
-          Pause
-        </button>
-        <button
-          onClick={() => stop().catch((e) => setErr(String(e)))}
-          className="rounded-lg bg-gray-100 px-5 py-2.5 text-sm font-medium text-gray-900 hover:bg-gray-200"
-        >
-          Stop
-        </button>
+      <div className="mt-8 flex flex-col items-center gap-4">
+        <div className="flex gap-3">
+          <button onClick={() => start().catch((e) => setErr(String(e)))} className="btn-cube px-5 py-2.5 text-sm">
+            Start
+          </button>
+          <button onClick={() => pause().catch((e) => setErr(String(e)))} className="btn-ghost px-5 py-2.5 text-sm">
+            Pause
+          </button>
+          <button onClick={() => stop().catch((e) => setErr(String(e)))} className="btn-ghost px-5 py-2.5 text-sm">
+            Stop
+          </button>
+        </div>
+        {sessions > 0 ? (
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            Session {sessions} today
+          </div>
+        ) : null}
       </div>
 
-      {err ? <div className="mt-4 text-center text-sm text-rose-700">{err}</div> : null}
+      {err ? <div className="mt-4 text-center text-sm" style={{ color: 'var(--danger)' }}>{err}</div> : null}
     </div>
   )
 }
-
