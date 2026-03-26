@@ -23,6 +23,7 @@ export function RemindersPage() {
     const m = message.trim()
     if (!m || !time) return
     setMessage('')
+    setTime('')
     await apiSend<Reminder>('/api/reminders/', {
       method: 'POST',
       body: {
@@ -40,29 +41,27 @@ export function RemindersPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Reminders</h1>
-      </div>
+    <div className="enter-up">
+      <h1 className="text-2xl font-bold">Reminders</h1>
 
-      <div className="mt-5 rounded-xl border border-gray-200 bg-white p-4">
+      <div className="card mt-5 p-4">
         <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
           <input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Reminder message…"
-            className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-indigo-500 md:col-span-2"
+            placeholder="Reminder message..."
+            className="field-control px-3 py-2 text-sm md:col-span-2"
           />
           <input
             type="datetime-local"
             value={time}
             onChange={(e) => setTime(e.target.value)}
-            className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+            className="field-control px-3 py-2 text-sm"
           />
           <select
             value={repeat}
             onChange={(e) => setRepeat(e.target.value as Reminder['repeat'])}
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+            className="field-control px-3 py-2 text-sm"
           >
             <option value="none">No repeat</option>
             <option value="daily">Daily</option>
@@ -72,35 +71,33 @@ export function RemindersPage() {
         <div className="mt-3 flex justify-end">
           <button
             onClick={() => add().catch((e) => setErr(String(e)))}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+            className="btn-cube px-4 py-2 text-sm"
           >
             Add reminder
           </button>
         </div>
-        {err ? <div className="mt-3 text-sm text-rose-700">{err}</div> : null}
+        {err ? <div className="mt-3 text-sm" style={{ color: 'var(--danger)' }}>{err}</div> : null}
       </div>
 
       <div className="mt-6 space-y-2">
         {items.length === 0 ? (
-          <div className="text-sm text-gray-500">No reminders yet.</div>
+          <div className="text-sm" style={{ color: 'var(--text-muted)' }}>No reminders yet.</div>
         ) : (
           items.map((r) => (
             <div
               key={r.id}
-              className={[
-                'flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3',
-                r.triggered ? 'opacity-60' : '',
-              ].join(' ')}
+              className="card-elevated flex items-center justify-between px-4 py-3"
+              style={{ opacity: r.triggered ? 0.5 : 1 }}
             >
               <div>
-                <div className="text-sm font-medium text-gray-900">{r.message}</div>
-                <div className="mt-1 text-xs text-gray-500">
+                <div className="text-sm font-medium">{r.message}</div>
+                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                   {new Date(r.trigger_time).toLocaleString()} · {r.repeat}
                 </div>
               </div>
               <button
                 onClick={() => remove(r.id).catch((e) => setErr(String(e)))}
-                className="rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-200"
+                className="btn-danger text-sm"
               >
                 Delete
               </button>
@@ -111,4 +108,3 @@ export function RemindersPage() {
     </div>
   )
 }
-
