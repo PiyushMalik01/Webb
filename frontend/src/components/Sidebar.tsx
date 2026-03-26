@@ -1,12 +1,8 @@
 import { NavLink } from 'react-router-dom'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { apiGet } from '../lib/api'
 import type { WebbStatus } from '../lib/types'
 import { WebbPreview } from './WebbPreview'
-
-function cn(...xs: Array<string | false | undefined | null>) {
-  return xs.filter(Boolean).join(' ')
-}
 
 const navItems = [
   {
@@ -110,11 +106,7 @@ export function Sidebar() {
             key={item.to}
             to={item.to}
             end={item.to === '/'}
-            className={({ isActive }) =>
-              cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition',
-              )
-            }
+            className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition"
             style={({ isActive }) => ({
               background: isActive ? 'var(--bg-elevated)' : 'transparent',
               color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
