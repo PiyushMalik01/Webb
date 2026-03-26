@@ -1,13 +1,18 @@
+import { apiWsUrl } from './api'
+
 export type NotificationEvent =
   | { type: 'idle_nudge'; text: string; created_at: string }
+  | { type: 'reminder_triggered'; text: string; reminder_id: number; created_at: string }
+  | { type: 'timer_complete'; text: string; created_at: string }
   | { type: string; [k: string]: any }
 
 export function connectNotifications(onEvent: (ev: NotificationEvent) => void) {
   let ws: WebSocket | null = null
   let stopped = false
   let backoffMs = 500
+  let reconnectTimer: number | null = null
 
-  const url = 'ws://127.0.0.1:8000/api/notifications/ws'
+  const url = apiWsUrl('/api/notifications/ws')
 
   function start() {
     if (stopped) return
@@ -23,11 +28,10 @@ export function connectNotifications(onEvent: (ev: NotificationEvent) => void) {
 
     ws.onclose = () => {
       if (stopped) return
-      const t = window.setTimeout(() => {
+      reconnectTimer = window.setTimeout(() => {
         backoffMs = Math.min(backoffMs * 1.6, 8000)
         start()
       }, backoffMs)
-      return () => window.clearTimeout(t)
     }
   }
 
@@ -35,11 +39,10 @@ export function connectNotifications(onEvent: (ev: NotificationEvent) => void) {
 
   return () => {
     stopped = true
-    try {
-      ws?.close()
-    } catch {
-      // ignore
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer)
+      reconnectTimer = null
     }
+    try { ws?.close() } catch { /* ignore */ }
   }
 }
-

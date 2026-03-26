@@ -4,11 +4,14 @@ import { connectNotifications, type NotificationEvent } from '../lib/notificatio
 type Toast = NotificationEvent & { id: string }
 
 function prettyTime(iso: string) {
-  try {
-    return new Date(iso).toLocaleTimeString()
-  } catch {
-    return ''
-  }
+  try { return new Date(iso).toLocaleTimeString() } catch { return '' }
+}
+
+function toastTitle(t: Toast): string {
+  if (t.type === 'idle_nudge') return 'Idle nudge'
+  if (t.type === 'reminder_triggered') return 'Reminder'
+  if (t.type === 'timer_complete') return 'Timer complete'
+  return t.type
 }
 
 export function NotificationCenter() {
@@ -30,28 +33,29 @@ export function NotificationCenter() {
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed right-5 top-5 z-50 flex w-[360px] flex-col gap-2">
+    <div className="fixed right-5 top-14 z-50 flex w-[360px] flex-col gap-2">
       {toasts.map((t) => (
-        <div key={t.id} className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+        <div key={t.id} className="card enter-up p-3">
           <div className="flex items-start justify-between gap-3">
-            <div className="text-sm font-semibold text-gray-900">
-              {t.type === 'idle_nudge' ? 'Idle nudge' : t.type}
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+              {toastTitle(t)}
             </div>
             <button
               onClick={() => setToasts((xs) => xs.filter((x) => x.id !== t.id))}
-              className="text-gray-400 hover:text-gray-700"
+              style={{ color: 'var(--text-muted)', background: 'transparent', border: 'none', padding: '0 4px' }}
               aria-label="Dismiss notification"
             >
               ×
             </button>
           </div>
-          {'text' in t && t.text ? <div className="mt-1 text-sm text-gray-700">{String(t.text)}</div> : null}
+          {'text' in t && t.text ? (
+            <div className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>{String(t.text)}</div>
+          ) : null}
           {'created_at' in t && t.created_at ? (
-            <div className="mt-2 text-xs text-gray-500">{prettyTime(String(t.created_at))}</div>
+            <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>{prettyTime(String(t.created_at))}</div>
           ) : null}
         </div>
       ))}
     </div>
   )
 }
-
