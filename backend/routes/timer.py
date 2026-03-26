@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..notifications_hub import hub
 from ..schemas import TimerStart, TimerStatus
 from ..serial_manager import get_serial_manager
 
@@ -24,6 +25,8 @@ class _TimerState:
 _timer = _TimerState()
 _timer_lock = asyncio.Lock()
 _clients: set[WebSocket] = set()
+_tick_task: Optional[asyncio.Task[None]] = None
+_tick_task_lock = asyncio.Lock()
 
 
 async def _broadcast(status: TimerStatus) -> None:
@@ -45,6 +48,13 @@ def _current_status() -> TimerStatus:
     )
 
 
+async def _ensure_tick_task_started() -> None:
+    global _tick_task
+    async with _tick_task_lock:
+        if _tick_task is None or _tick_task.done():
+            _tick_task = asyncio.create_task(_tick_loop())
+
+
 @router.get("/status", response_model=TimerStatus)
 async def get_status() -> TimerStatus:
     async with _timer_lock:
@@ -53,6 +63,8 @@ async def get_status() -> TimerStatus:
 
 @router.post("/start", response_model=TimerStatus)
 async def start_timer(payload: TimerStart) -> TimerStatus:
+    await _ensure_tick_task_started()
+
     async with _timer_lock:
         _timer.state = "running"
         _timer.duration_seconds = int(payload.duration_minutes) * 60
@@ -103,10 +115,12 @@ async def _tick_loop() -> None:
         async with _timer_lock:
             if _timer.state != "running":
                 continue
+
             now = time.monotonic()
             elapsed = int(now - _timer.last_tick_monotonic)
             if elapsed <= 0:
                 continue
+
             _timer.last_tick_monotonic = now
             _timer.seconds_remaining = max(0, _timer.seconds_remaining - elapsed)
             status = _current_status()
@@ -115,28 +129,26 @@ async def _tick_loop() -> None:
                 _timer.state = "idle"
                 _timer.duration_seconds = 0
                 _timer.last_tick_monotonic = 0.0
-                # best-effort serial reset
                 try:
-                    get_serial_manager().send_face("IDLE")
+                    get_serial_manager().send_face("HAPPY")
                 except Exception:
                     pass
                 status = _current_status()
+                await hub.publish({
+                    "type": "timer_complete",
+                    "text": "Pomodoro complete!",
+                    "created_at": __import__("datetime").datetime.utcnow().isoformat(),
+                })
 
         await _broadcast(status)
 
 
-_tick_task_started = False
-
-
 @router.websocket("/ws")
 async def timer_ws(ws: WebSocket) -> None:
-    global _tick_task_started
     await ws.accept()
     _clients.add(ws)
 
-    if not _tick_task_started:
-        _tick_task_started = True
-        asyncio.create_task(_tick_loop())
+    await _ensure_tick_task_started()
 
     try:
         async with _timer_lock:
@@ -148,3 +160,23 @@ async def timer_ws(ws: WebSocket) -> None:
         pass
     finally:
         _clients.discard(ws)
+
+
+async def shutdown_timer_background() -> None:
+    global _tick_task
+    async with _tick_task_lock:
+        if _tick_task is not None:
+            _tick_task.cancel()
+            try:
+                await _tick_task
+            except asyncio.CancelledError:
+                pass
+            _tick_task = None
+
+    async with _timer_lock:
+        _timer.state = "idle"
+        _timer.duration_seconds = 0
+        _timer.seconds_remaining = 0
+        _timer.last_tick_monotonic = 0.0
+
+    _clients.clear()
