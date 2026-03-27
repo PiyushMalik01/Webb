@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from ..schemas import FaceSet, WebbStatus
+from ..schemas import FaceSet, WebbFaceResult, WebbStatus
 from ..serial_manager import get_serial_manager
 
 router = APIRouter()
@@ -20,16 +20,16 @@ def webb_status() -> WebbStatus:
     )
 
 
-@router.post("/face")
-def set_face(payload: FaceSet) -> dict[str, str]:
+@router.post("/face", response_model=WebbFaceResult)
+def set_face(payload: FaceSet) -> WebbFaceResult:
     try:
         get_serial_manager().send_face(payload.face)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         # Surface error in response but do not fail the request
-        return {"ok": "false", "face": payload.face, "error": f"{e}"}
-    return {"ok": "true", "face": payload.face, "error": ""}
+        return WebbFaceResult(ok=False, face=payload.face, error=f"{e}")
+    return WebbFaceResult(ok=True, face=payload.face, error="")
 
 
 @router.post("/speak")

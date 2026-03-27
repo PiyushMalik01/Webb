@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 Priority = Literal["low", "medium", "high"]
@@ -32,8 +32,7 @@ class TaskOut(BaseModel):
     completed: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ReminderCreate(BaseModel):
@@ -50,8 +49,7 @@ class ReminderOut(BaseModel):
     triggered: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TimerStart(BaseModel):
@@ -74,4 +72,17 @@ class WebbStatus(BaseModel):
     baud: int
     last_face: Optional[str]
     last_error: Optional[str]
+
+
+class WebbFaceResult(BaseModel):
+    ok: bool
+    face: str
+    error: str
+
+
+class VoiceOnceOut(BaseModel):
+    text: str
+    intent: dict[str, Any]
+    result_summary: str
+    stt_error: str
 

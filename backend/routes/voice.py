@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from ..schemas import VoiceOnceOut
 from ..voice_manager import capture_and_process_once
 
 router = APIRouter()
 
 
-@router.post("/once")
-def voice_once() -> dict:
+@router.post("/once", response_model=VoiceOnceOut)
+def voice_once() -> VoiceOnceOut:
     """
     Trigger a one-shot voice capture and intent execution.
     """
-    summary = capture_and_process_once()
-    return summary
+    return VoiceOnceOut(**capture_and_process_once())
 
 
 @router.get("/status")

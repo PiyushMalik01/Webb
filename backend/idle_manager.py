@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import threading
 import time
@@ -9,7 +8,7 @@ from typing import Optional
 
 from pynput import keyboard, mouse
 
-from .ai_manager import parse_intent
+from .ai_manager import generate_idle_nudge
 from .notifications_hub import hub
 from .serial_manager import get_serial_manager
 
@@ -20,6 +19,8 @@ class IdleManager:
         self._last_activity = time.time()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._keyboard_listener: Optional[keyboard.Listener] = None
+        self._mouse_listener: Optional[mouse.Listener] = None
         self._cooldown_until = 0.0
 
     def mark_activity(self) -> None:
@@ -36,12 +37,39 @@ class IdleManager:
         self._thread.start()
 
         # start input listeners (non-blocking)
-        keyboard.Listener(on_press=lambda _: self.mark_activity(), on_release=lambda _: self.mark_activity()).start()
-        mouse.Listener(
+        self._keyboard_listener = keyboard.Listener(
+            on_press=lambda _: self.mark_activity(),
+            on_release=lambda _: self.mark_activity(),
+        )
+        self._keyboard_listener.start()
+
+        self._mouse_listener = mouse.Listener(
             on_move=lambda *_: self.mark_activity(),
             on_click=lambda *_: self.mark_activity(),
             on_scroll=lambda *_: self.mark_activity(),
-        ).start()
+        )
+        self._mouse_listener.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+        if self._keyboard_listener is not None:
+            try:
+                self._keyboard_listener.stop()
+            except Exception:
+                pass
+            self._keyboard_listener = None
+
+        if self._mouse_listener is not None:
+            try:
+                self._mouse_listener.stop()
+            except Exception:
+                pass
+            self._mouse_listener = None
+
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._thread = None
 
     def _run(self) -> None:
         threshold_mins = int(os.getenv("IDLE_THRESHOLD_MINS", "20"))
@@ -55,12 +83,7 @@ class IdleManager:
                 cooldown_until = self._cooldown_until
 
             if idle_for >= threshold_s and now >= cooldown_until:
-                # Generate a short motivational nudge via LLM.
-                # We reuse parse_intent with a general_chat-ish prompt to keep code small.
-                # If OPENAI_API_KEY is missing, parse_intent falls back safely.
-                prompt = "Generate a short motivational nudge (1 sentence) to help me get back to work."
-                intent = parse_intent(prompt)
-                text = str(intent.get("response") or "Ready to get back to it?")
+                text = generate_idle_nudge()
 
                 try:
                     get_serial_manager().send_face("REMINDER")
@@ -73,11 +96,12 @@ class IdleManager:
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
 
-                try:
-                    asyncio.run(hub.publish(event))
-                except RuntimeError:
-                    # If an event loop already exists in this thread (unlikely), skip.
-                    pass
+                fut = hub.publish_threadsafe(event)
+                if fut is not None:
+                    try:
+                        fut.result(timeout=2.0)
+                    except Exception:
+                        pass
 
                 with self._lock:
                     self._cooldown_until = time.time() + cooldown_s

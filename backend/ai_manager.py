@@ -23,11 +23,17 @@ Return ONLY minified JSON, with no explanations.
 """
 
 
+NUDGE_SYSTEM_PROMPT = """
+You are a supportive productivity coach.
+Respond with exactly one short motivational sentence (max 18 words), plain text only.
+"""
+
+
 def _get_client() -> OpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, timeout=20.0)
 
 
 def parse_intent(text: str) -> Dict[str, Any]:
@@ -61,5 +67,29 @@ def parse_intent(text: str) -> Dict[str, Any]:
         pass
 
     return {"type": "general_chat", "response": text}
+
+
+def generate_idle_nudge() -> str:
+    try:
+        client = _get_client()
+    except Exception:
+        return "Ready to get back to it?"
+
+    try:
+        completion = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+            messages=[
+                {"role": "system", "content": NUDGE_SYSTEM_PROMPT},
+                {"role": "user", "content": "Give me one nudge."},
+            ],
+            max_tokens=48,
+        )
+        content = (completion.choices[0].message.content or "").strip()
+        if content:
+            return content
+    except Exception:
+        pass
+
+    return "Ready to get back to it?"
 
 

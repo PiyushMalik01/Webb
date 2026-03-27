@@ -17,7 +17,7 @@ def _get_openai_client() -> OpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, timeout=25.0)
 
 
 def _stt_once() -> str:
@@ -30,7 +30,11 @@ def _stt_once() -> str:
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
         recognizer.adjust_for_ambient_noise(source, duration=0.5)
-        audio = recognizer.listen(source, phrase_time_limit=7)
+        audio = recognizer.listen(
+            source,
+            timeout=float(os.getenv("VOICE_LISTEN_TIMEOUT_SECS", "4")),
+            phrase_time_limit=float(os.getenv("VOICE_PHRASE_TIME_LIMIT_SECS", "7")),
+        )
 
     # Save to a temporary WAV file, then send to OpenAI audio API
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:

@@ -1,4 +1,11 @@
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000'
+export const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000'
+
+export function apiWsUrl(path: string): string {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  const base = new URL(API_BASE)
+  const protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${base.host}${normalizedPath}`
+}
 
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`)
