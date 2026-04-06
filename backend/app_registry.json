@@ -1,0 +1,18 @@
+{
+  "chrome": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "firefox": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+  "edge": "msedge",
+  "vscode": "code",
+  "spotify": "spotify",
+  "explorer": "explorer",
+  "notepad": "notepad",
+  "calculator": "calc",
+  "terminal": "wt",
+  "cmd": "cmd",
+  "powershell": "powershell",
+  "paint": "mspaint",
+  "snipping tool": "snippingtool",
+  "task manager": "taskmgr",
+  "settings": "ms-settings:",
+  "store": "ms-windows-store:"
+}
