@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Priority = Literal["low", "medium", "high"]
 Repeat = Literal["none", "daily", "weekly"]
-Face = Literal["IDLE", "HAPPY", "FOCUS", "SLEEPY", "REMINDER", "LISTENING", "SURPRISED"]
+Face = Literal["IDLE", "HAPPY", "FOCUS", "SLEEPY", "REMINDER", "LISTENING", "SURPRISED", "THINKING", "SPEAKING"]
 
 
 class TaskCreate(BaseModel):

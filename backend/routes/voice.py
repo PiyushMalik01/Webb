@@ -2,22 +2,26 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ..schemas import VoiceOnceOut
-from ..voice_manager import capture_and_process_once
+from ..voice_loop import get_state, interrupt, trigger_manual
 
 router = APIRouter()
 
 
-@router.post("/once", response_model=VoiceOnceOut)
-def voice_once() -> VoiceOnceOut:
-    """
-    Trigger a one-shot voice capture and intent execution.
-    """
-    return VoiceOnceOut(**capture_and_process_once())
+@router.post("/once")
+def voice_once() -> dict:
+    """Trigger a one-shot voice capture via mic button. Routes through AI Brain."""
+    result = trigger_manual()
+    return result
 
 
 @router.get("/status")
 def voice_status() -> dict:
-    # Reserved for future wake-word support.
-    return {"listening": False}
+    """Return current voice loop state."""
+    return {"state": get_state().value}
 
+
+@router.post("/interrupt")
+def voice_interrupt() -> dict:
+    """Interrupt current voice processing/speech."""
+    interrupt()
+    return {"ok": True}
