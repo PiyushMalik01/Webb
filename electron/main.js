@@ -167,8 +167,8 @@ function createWindow() {
       symbolColor: '#ffffff',
       height: 34,
     },
-    transparent: true,
-    backgroundColor: '#00000000',
+    transparent: false,
+    backgroundColor: '#0f0f0f',
     hasShadow: true,
     autoHideMenuBar: true,
     webPreferences: {
@@ -181,8 +181,29 @@ function createWindow() {
   win.setMenuBarVisibility(false)
 
   if (process.env.NODE_ENV === 'development') {
-    win.loadURL(DEV_URL)
-    win.webContents.openDevTools({ mode: 'detach' })
+    // Wait for Vite dev server to be ready before loading
+    const waitForVite = async () => {
+      const maxRetries = 30
+      for (let i = 0; i < maxRetries; i++) {
+        try {
+          const http = require('http')
+          await new Promise((resolve, reject) => {
+            const req = http.get(DEV_URL, (res) => { res.resume(); resolve() })
+            req.on('error', reject)
+            req.setTimeout(1000, () => { req.destroy(); reject(new Error('timeout')) })
+          })
+          console.log('[electron] Vite ready, loading frontend...')
+          win.loadURL(DEV_URL)
+          return
+        } catch {
+          console.log(`[electron] Waiting for Vite... (${i + 1}/${maxRetries})`)
+          await new Promise(r => setTimeout(r, 1000))
+        }
+      }
+      console.error('[electron] Vite did not start in time')
+      win.loadURL(DEV_URL) // Try anyway
+    }
+    waitForVite()
   } else {
     win.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'))
   }
