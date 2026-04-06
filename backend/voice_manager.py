@@ -51,6 +51,7 @@ def _stt_once() -> str:
             transcript = client.audio.transcriptions.create(
                 model=os.getenv("OPENAI_WHISPER_MODEL", "gpt-4o-mini-transcribe"),
                 file=f,
+                language="en",
             )
 
         return transcript.text.strip()
