@@ -338,6 +338,21 @@ def open_file(path: str) -> str:
         return f"Failed to open file: {e}"
 
 
+# ── Keyboard ─────────────────────────────────────────────────
+
+def press_key(keys: str) -> str:
+    try:
+        import pyautogui
+        parts = [k.strip() for k in keys.lower().replace("+", " ").split()]
+        if len(parts) == 1:
+            pyautogui.press(parts[0])
+        else:
+            pyautogui.hotkey(*parts)
+        return f"Pressed {keys}"
+    except Exception as e:
+        return f"Key press failed: {e}"
+
+
 # ── Registration ──────────────────────────────────────────────
 
 def register_all_actions() -> None:
@@ -345,33 +360,109 @@ def register_all_actions() -> None:
     r = action_registry.register
 
     # App management
-    r("launch_app", "Open an application by name (e.g. Chrome, VS Code, Spotify)", ["app_name"], launch_app, "apps")
-    r("add_app", "Register a new application with its path", ["app_name", "path"], add_app, "apps")
-    r("list_apps", "List all known applications", [], lambda: list_apps(), "apps")
+    r("launch_app", "Open an application by name (e.g. Chrome, VS Code, Spotify)",
+      {"type": "object", "properties": {
+          "app_name": {"type": "string", "description": "Name of the app to launch"}
+      }, "required": ["app_name"]},
+      launch_app, "green", "apps")
+
+    r("add_app", "Register a new application with its executable path",
+      {"type": "object", "properties": {
+          "app_name": {"type": "string", "description": "Friendly name for the app"},
+          "path": {"type": "string", "description": "Executable path or ms- protocol URI"}
+      }, "required": ["app_name", "path"]},
+      add_app, "green", "apps")
+
+    r("list_apps", "List all known applications",
+      {"type": "object", "properties": {}},
+      lambda: list_apps(), "green", "apps")
 
     # Window management
-    r("switch_to", "Switch to an open window by name", ["app_name"], switch_to, "windows")
-    r("minimize", "Minimize the active window", [], lambda: minimize_active(), "windows")
-    r("maximize", "Maximize the active window", [], lambda: maximize_active(), "windows")
-    r("close_window", "Close the active window", [], lambda: close_active(), "windows")
-    r("show_desktop", "Show the desktop (minimize all)", [], lambda: show_desktop(), "windows")
+    r("switch_to", "Switch to an open window by name",
+      {"type": "object", "properties": {
+          "app_name": {"type": "string", "description": "Title or name of the window to switch to"}
+      }, "required": ["app_name"]},
+      switch_to, "green", "windows")
+
+    r("minimize", "Minimize the active window",
+      {"type": "object", "properties": {}},
+      lambda: minimize_active(), "green", "windows")
+
+    r("maximize", "Maximize the active window",
+      {"type": "object", "properties": {}},
+      lambda: maximize_active(), "green", "windows")
+
+    r("close_window", "Close the active window",
+      {"type": "object", "properties": {}},
+      lambda: close_active(), "yellow", "windows")
+
+    r("show_desktop", "Show the desktop (minimize all windows)",
+      {"type": "object", "properties": {}},
+      lambda: show_desktop(), "green", "windows")
 
     # Volume & media
-    r("volume", "Control volume: up, down, mute, unmute, or a percentage", ["action"], set_volume, "system")
-    r("media", "Control media playback: play, pause, next, previous, stop", ["action"], media_control, "system")
+    r("volume", "Control volume: up, down, mute, unmute, or a percentage",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "description": "Volume action: up, down, mute, unmute, or a percentage like 50"}
+      }, "required": ["action"]},
+      set_volume, "green", "system")
+
+    r("media", "Control media playback: play, pause, next, previous, stop",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "description": "Media action: play, pause, next, previous, or stop"}
+      }, "required": ["action"]},
+      media_control, "green", "system")
 
     # System
-    r("screenshot", "Take a screenshot and save to Pictures/Screenshots", [], lambda: take_screenshot(), "system")
-    r("lock_screen", "Lock the computer screen", [], lambda: lock_screen(), "system")
-    r("brightness", "Control screen brightness: up, down, or a percentage", ["action"], set_brightness, "system")
+    r("screenshot", "Take a screenshot and save to Pictures/Screenshots",
+      {"type": "object", "properties": {}},
+      lambda: take_screenshot(), "green", "system")
+
+    r("lock_screen", "Lock the computer screen",
+      {"type": "object", "properties": {}},
+      lambda: lock_screen(), "yellow", "system")
+
+    r("brightness", "Control screen brightness: up, down, or a percentage",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "description": "Brightness action: up, down, or a percentage like 75"}
+      }, "required": ["action"]},
+      set_brightness, "green", "system")
 
     # Web
-    r("web_search", "Search Google for a query", ["query"], web_search, "web")
-    r("open_url", "Open a URL in the browser", ["url"], open_url, "web")
+    r("web_search", "Search Google for a query",
+      {"type": "object", "properties": {
+          "query": {"type": "string", "description": "Search query string"}
+      }, "required": ["query"]},
+      web_search, "green", "web")
 
-    # Typing
-    r("type_text", "Type text into the active window", ["text"], type_text, "input")
+    r("open_url", "Open a URL in the default browser",
+      {"type": "object", "properties": {
+          "url": {"type": "string", "description": "URL to open (https:// prefix added if missing)"}
+      }, "required": ["url"]},
+      open_url, "green", "web")
+
+    # Typing & input
+    r("type_text", "Type text into the active window",
+      {"type": "object", "properties": {
+          "text": {"type": "string", "description": "Text to type"}
+      }, "required": ["text"]},
+      type_text, "green", "input")
+
+    r("press_key", "Press a keyboard shortcut (e.g. ctrl+s, alt+tab, enter)",
+      {"type": "object", "properties": {
+          "keys": {"type": "string", "description": "Key or shortcut to press, e.g. 'ctrl+s', 'alt+tab', 'enter'"}
+      }, "required": ["keys"]},
+      press_key, "green", "input")
 
     # Files
-    r("open_folder", "Open a folder (Downloads, Documents, Desktop, etc.)", ["name"], open_folder, "files")
-    r("open_file", "Open a file by its path", ["path"], open_file, "files")
+    r("open_folder", "Open a folder (Downloads, Documents, Desktop, etc.)",
+      {"type": "object", "properties": {
+          "name": {"type": "string", "description": "Folder name or path to open"}
+      }, "required": ["name"]},
+      open_folder, "green", "files")
+
+    r("open_file", "Open a file by its path",
+      {"type": "object", "properties": {
+          "path": {"type": "string", "description": "Full path to the file to open"}
+      }, "required": ["path"]},
+      open_file, "green", "files")
