@@ -19,6 +19,9 @@ export function NotificationCenter() {
 
   useEffect(() => {
     const disconnect = connectNotifications((ev) => {
+      // Skip noisy internal events
+      if (ev.type === 'voice_state' || ev.type === 'wake_word' || ev.type === 'action_executed') return
+
       const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`
       const toast: Toast = { ...(ev as any), id }
       setToasts((xs) => [toast, ...xs].slice(0, 5))
