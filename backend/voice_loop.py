@@ -9,8 +9,6 @@ from typing import Any, Dict, Optional
 
 import speech_recognition as sr
 
-from .notifications_hub import hub
-
 
 class VoiceState(str, Enum):
     IDLE = "idle"
@@ -25,13 +23,6 @@ _state_lock = threading.Lock()
 _stop_event = threading.Event()
 _listen_thread: Optional[threading.Thread] = None
 
-# Trigger words — Webb only activates on these
-TRIGGER_WORDS = [
-    "hey webb", "hey web", "hey wab", "a web", "he web",
-    "hi webb", "hi web", "okay webb", "ok webb",
-    "webb", "web",
-]
-
 
 def get_state() -> VoiceState:
     with _state_lock:
@@ -43,7 +34,7 @@ def _set_state(new_state: VoiceState) -> None:
     with _state_lock:
         _state = new_state
 
-    # Update face on ESP32 — only for meaningful state changes
+    # Update face on ESP32
     face_map = {
         VoiceState.LISTENING: "LISTENING",
         VoiceState.PROCESSING: "THINKING",
@@ -58,8 +49,10 @@ def _set_state(new_state: VoiceState) -> None:
         pass
 
 
+# ── Fast STT ─────────────────────────────────────────────────
+
 def _fast_transcribe(audio_data) -> str:
-    """Transcribe audio using Whisper. Returns empty string on failure."""
+    """Transcribe audio. Returns empty string on failure."""
     tmp_path = None
     try:
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -87,8 +80,10 @@ def _fast_transcribe(audio_data) -> str:
                 pass
 
 
+# ── Process & Respond ────────────────────────────────────────
+
 def _process_and_respond(text: str) -> Dict[str, Any]:
-    """Process through AI brain, execute actions, speak response."""
+    """Process through AI brain, execute actions, speak response. Optimized for speed."""
     from . import ai_manager
     from . import tts_manager
 
@@ -98,16 +93,18 @@ def _process_and_respond(text: str) -> Dict[str, Any]:
     speak_text = result.get("speak", "")
     face = result.get("face", "HAPPY")
 
-    if result.get("action_results"):
-        _set_state(VoiceState.EXECUTING)
-        time.sleep(0.3)
-
+    # Set face immediately
     try:
         from .serial_manager import get_serial_manager
         get_serial_manager().send_face(face)
     except Exception:
         pass
 
+    # Execute actions (no artificial delay)
+    if result.get("action_results"):
+        _set_state(VoiceState.EXECUTING)
+
+    # Speak response
     if speak_text:
         _set_state(VoiceState.SPEAKING)
         tts_manager.speak_sync(speak_text)
@@ -116,119 +113,82 @@ def _process_and_respond(text: str) -> Dict[str, Any]:
     return result
 
 
-def _check_trigger(text: str) -> tuple[bool, str]:
-    """
-    Check if text starts with a trigger word.
-    Returns (triggered, remaining_command).
-    """
-    lower = text.lower().strip()
-    if not lower:
-        return False, ""
-
-    for trigger in sorted(TRIGGER_WORDS, key=len, reverse=True):
-        if lower.startswith(trigger):
-            remainder = text[len(trigger):].strip().lstrip(",.!? ")
-            return True, remainder
-        # Also check with slight variations (Whisper might hear "web" as "Webb")
-        if lower == trigger:
-            return True, ""
-
-    return False, ""
-
-
-def _capture_full_command() -> str:
-    """Capture a full voice command after activation. Waits for the user to finish speaking."""
-    recognizer = sr.Recognizer()
-    recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 1.5  # Wait 1.5s of silence before considering speech done
-    recognizer.phrase_threshold = 0.3
-
-    try:
-        with sr.Microphone() as source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.3)
-            audio = recognizer.listen(
-                source,
-                timeout=5.0,           # Wait up to 5s for speech to start
-                phrase_time_limit=15.0,  # Allow up to 15s of continuous speech
-            )
-        return _fast_transcribe(audio)
-    except sr.WaitTimeoutError:
-        return ""
-    except Exception as e:
-        print(f"[voice] Capture error: {e}")
-        return ""
-
-
 # ── Passive Listening ────────────────────────────────────────
 
 def _passive_listen_loop() -> None:
     """
-    Passive listening: listen for trigger words only.
-    Does NOT process random speech — only activates on "Webb", "Hey Webb", etc.
-    Uses short capture windows to detect trigger words quickly.
+    Smart passive listening:
+    1. Wait for speech (energy-based, no constant API calls)
+    2. Transcribe what was said
+    3. Use AI classifier to determine if it's directed at Webb
+    4. Only process if it is — ignore everything else silently
     """
-    print("[voice_loop] Passive listening active — say 'Hey Webb' to activate")
+    print("[voice_loop] Passive listening active — talk to Webb naturally")
 
     recognizer = sr.Recognizer()
     recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.8   # Short pause = end of trigger phrase
-    recognizer.phrase_threshold = 0.2
+    recognizer.energy_threshold = 300  # Adjust based on ambient noise
+    recognizer.pause_threshold = 1.2   # 1.2s silence = end of phrase
+    recognizer.phrase_threshold = 0.3
+    recognizer.non_speaking_duration = 0.5
 
     while not _stop_event.is_set():
         if get_state() != VoiceState.IDLE:
-            time.sleep(0.2)
+            time.sleep(0.1)
             continue
 
         try:
+            # Step 1: Wait for speech (blocks until voice detected, zero CPU)
             with sr.Microphone() as source:
-                recognizer.adjust_for_ambient_noise(source, duration=0.2)
+                # Brief ambient noise calibration (only first time is slow)
+                recognizer.adjust_for_ambient_noise(source, duration=0.15)
                 try:
-                    # Short listen window — just enough to catch trigger words
                     audio = recognizer.listen(
                         source,
-                        timeout=None,          # Wait indefinitely for speech
-                        phrase_time_limit=5.0,  # But each phrase max 5s
+                        timeout=None,           # Wait forever for speech
+                        phrase_time_limit=12.0,  # Max 12s per phrase
                     )
                 except sr.WaitTimeoutError:
                     continue
 
-            # Transcribe what we heard
+            # Step 2: Transcribe
             text = _fast_transcribe(audio)
-            if not text:
+            if not text or len(text.strip()) < 2:
                 continue
 
-            # Check for trigger
-            triggered, remainder = _check_trigger(text)
-            if not triggered:
-                # Not for us — ignore silently
+            # Step 3: Is this directed at Webb? (fast classifier)
+            from . import ai_manager
+            if not ai_manager.is_directed_at_webb(text):
+                # Not for Webb — silently ignore
                 continue
 
-            print(f"[voice_loop] Triggered! Heard: \"{text}\"")
+            print(f"[voice_loop] For Webb: \"{text}\"")
 
-            if remainder and len(remainder.split()) >= 2:
-                # Full command in the trigger phrase: "Hey Webb open Chrome"
-                print(f"[voice_loop] Command: \"{remainder}\"")
-                _process_and_respond(remainder)
-            else:
-                # Just trigger word — acknowledge and listen for command
-                from . import tts_manager
-                _set_state(VoiceState.LISTENING)
-                tts_manager.speak_sync("Yes?")
+            # Step 4: Strip trigger words if present
+            command = _strip_trigger(text)
 
-                # Now capture the full command
-                _set_state(VoiceState.LISTENING)
-                command = _capture_full_command()
-
-                if command:
-                    print(f"[voice_loop] Command: \"{command}\"")
-                    _process_and_respond(command)
-                else:
-                    _set_state(VoiceState.IDLE)
+            # Step 5: Process
+            _process_and_respond(command)
 
         except Exception as e:
-            print(f"[voice_loop] Error: {e}")
+            if "aborted" not in str(e).lower():
+                print(f"[voice_loop] Error: {e}")
             _set_state(VoiceState.IDLE)
-            time.sleep(0.5)
+            time.sleep(0.3)
+
+
+def _strip_trigger(text: str) -> str:
+    """Remove leading trigger words like 'hey webb' from the command."""
+    lower = text.lower().strip()
+    prefixes = [
+        "hey webb ", "hey web ", "hi webb ", "hi web ",
+        "okay webb ", "ok webb ", "yo webb ",
+        "webb ", "web ",
+    ]
+    for prefix in prefixes:
+        if lower.startswith(prefix):
+            return text[len(prefix):].strip()
+    return text
 
 
 # ── Wake Word Loop (Picovoice) ───────────────────────────────
@@ -237,27 +197,24 @@ def _wake_word_loop() -> None:
     """Wake word detection using Picovoice Porcupine."""
     access_key = os.getenv("PICOVOICE_ACCESS_KEY", "")
     if not access_key:
-        print("[voice_loop] PICOVOICE_ACCESS_KEY not set.")
         return
 
     try:
         import pvporcupine
         import pvrecorder
     except ImportError:
-        print("[voice_loop] pvporcupine/pvrecorder not installed.")
         return
 
     porcupine = None
     recorder = None
 
     try:
-        keyword_paths = None
-        keywords = None
-
         custom_keyword = os.getenv("WAKE_WORD_PATH")
         if custom_keyword and os.path.exists(custom_keyword):
             keyword_paths = [custom_keyword]
+            keywords = None
         else:
+            keyword_paths = None
             keywords = ["hey google"]
 
         sensitivity = float(os.getenv("WAKE_WORD_SENSITIVITY", "0.5"))
@@ -275,7 +232,7 @@ def _wake_word_loop() -> None:
         )
         recorder.start()
 
-        print(f"[voice_loop] Wake word active")
+        print("[voice_loop] Wake word active")
 
         while not _stop_event.is_set():
             if get_state() != VoiceState.IDLE:
@@ -284,13 +241,8 @@ def _wake_word_loop() -> None:
 
             pcm = recorder.read()
             if porcupine.process(pcm) >= 0:
-                print("[voice_loop] Wake word detected!")
-                from . import tts_manager
                 _set_state(VoiceState.LISTENING)
-                tts_manager.speak_sync("Yes?")
-
-                _set_state(VoiceState.LISTENING)
-                command = _capture_full_command()
+                command = _capture_command()
                 if command:
                     _process_and_respond(command)
                 else:
@@ -312,6 +264,28 @@ def _wake_word_loop() -> None:
                 pass
 
 
+def _capture_command() -> str:
+    """Capture a voice command with proper silence detection."""
+    recognizer = sr.Recognizer()
+    recognizer.dynamic_energy_threshold = True
+    recognizer.pause_threshold = 1.5
+    recognizer.phrase_threshold = 0.3
+
+    try:
+        with sr.Microphone() as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.2)
+            audio = recognizer.listen(
+                source,
+                timeout=5.0,
+                phrase_time_limit=15.0,
+            )
+        return _fast_transcribe(audio)
+    except sr.WaitTimeoutError:
+        return ""
+    except Exception:
+        return ""
+
+
 # ── Manual Trigger ───────────────────────────────────────────
 
 def trigger_manual() -> Dict[str, Any]:
@@ -320,7 +294,7 @@ def trigger_manual() -> Dict[str, Any]:
         return {"speak": "I'm already busy.", "actions": [], "face": "IDLE", "action_results": []}
 
     _set_state(VoiceState.LISTENING)
-    command = _capture_full_command()
+    command = _capture_command()
 
     if not command:
         _set_state(VoiceState.IDLE)
@@ -339,7 +313,6 @@ def trigger_manual() -> Dict[str, Any]:
 
 
 def interrupt() -> None:
-    """Interrupt current voice processing."""
     from . import tts_manager
     tts_manager.interrupt()
     _set_state(VoiceState.IDLE)
@@ -348,7 +321,6 @@ def interrupt() -> None:
 # ── Start / Stop ─────────────────────────────────────────────
 
 def start() -> None:
-    """Start the voice loop."""
     global _listen_thread
 
     if _listen_thread is not None and _listen_thread.is_alive():
@@ -363,11 +335,10 @@ def start() -> None:
         _listen_thread = threading.Thread(target=_passive_listen_loop, daemon=True)
         _listen_thread.start()
     else:
-        print("[voice_loop] No listening mode enabled. Use mic button only.")
+        print("[voice_loop] No listening mode. Use mic button only.")
 
 
 def stop() -> None:
-    """Stop the voice loop."""
     _stop_event.set()
     if _listen_thread is not None:
         _listen_thread.join(timeout=3.0)

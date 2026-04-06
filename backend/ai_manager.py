@@ -20,12 +20,69 @@ You are a supportive productivity coach.
 Respond with exactly one short motivational sentence (max 18 words), plain text only.
 """
 
+INTENT_CLASSIFIER_PROMPT = """You hear ambient audio transcriptions from a desk microphone. Classify if the speech is directed at the desk assistant "Webb" or not.
+
+Reply with ONLY one word:
+- WEBB — if the person is talking to Webb / giving a command / asking Webb something
+- IGNORE — if it's background noise, talking to someone else, music, TV, or not directed at Webb
+
+Examples:
+"hey webb open chrome" → WEBB
+"so I was telling him about the meeting" → IGNORE
+"open my browser please" → WEBB
+"yeah that sounds good" → IGNORE
+"what time is it" → WEBB
+"haha that's funny" → IGNORE
+"play some music" → WEBB
+"can you hear me" → WEBB
+"I don't know man" → IGNORE
+"""
+
+_client: Optional[OpenAI] = None
+
 
 def _get_client() -> OpenAI:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
-    return OpenAI(api_key=api_key, timeout=20.0)
+    global _client
+    if _client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set")
+        _client = OpenAI(api_key=api_key, timeout=10.0)
+    return _client
+
+
+def is_directed_at_webb(text: str) -> bool:
+    """Fast AI classifier: is this speech directed at Webb or background noise?"""
+    text = text.strip()
+    if not text:
+        return False
+
+    # Quick keyword check first (instant, no API call)
+    lower = text.lower()
+    direct_triggers = ["webb", "web ", "hey web", "open ", "search ", "start ", "set ",
+                       "add ", "what ", "how ", "can you", "tell me", "show me",
+                       "play ", "pause", "volume", "mute", "close ", "switch ",
+                       "type ", "lock", "screenshot", "remind", "timer", "task"]
+    for trigger in direct_triggers:
+        if trigger in lower:
+            return True
+
+    # If no keyword match, ask AI (fast model, tiny prompt)
+    try:
+        client = _get_client()
+        completion = client.chat.completions.create(
+            model="gpt-4.1-nano",  # Fastest model for classification
+            messages=[
+                {"role": "system", "content": INTENT_CLASSIFIER_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            max_tokens=4,
+        )
+        answer = (completion.choices[0].message.content or "").strip().upper()
+        return answer == "WEBB"
+    except Exception:
+        # If classifier fails, default to processing (better to respond than ignore)
+        return True
 
 
 def process_message(text: str) -> Dict[str, Any]:
@@ -46,7 +103,8 @@ def process_message(text: str) -> Dict[str, Any]:
         completion = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
             messages=messages,
-            max_tokens=512,
+            max_tokens=256,
+            temperature=0.7,
         )
         content = completion.choices[0].message.content or ""
     except Exception as e:
