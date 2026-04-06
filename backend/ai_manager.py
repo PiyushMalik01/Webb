@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
-from typing import Any, Dict, List
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
@@ -13,30 +15,7 @@ from .conversation_manager import conversation
 from .database import SessionLocal
 from .models import Reminder, Task
 from .serial_manager import get_serial_manager
-
-
-NUDGE_SYSTEM_PROMPT = """
-You are a supportive productivity coach.
-Respond with exactly one short motivational sentence (max 18 words), plain text only.
-"""
-
-INTENT_CLASSIFIER_PROMPT = """You hear ambient audio transcriptions from a desk microphone. Classify if the speech is directed at the desk assistant "Webb" or not.
-
-Reply with ONLY one word:
-- WEBB — if the person is talking to Webb / giving a command / asking Webb something
-- IGNORE — if it's background noise, talking to someone else, music, TV, or not directed at Webb
-
-Examples:
-"hey webb open chrome" → WEBB
-"so I was telling him about the meeting" → IGNORE
-"open my browser please" → WEBB
-"yeah that sounds good" → IGNORE
-"what time is it" → WEBB
-"haha that's funny" → IGNORE
-"play some music" → WEBB
-"can you hear me" → WEBB
-"I don't know man" → IGNORE
-"""
+from .fast_path import try_fast_path
 
 _client: Optional[OpenAI] = None
 
@@ -47,143 +26,263 @@ def _get_client() -> OpenAI:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
-        _client = OpenAI(api_key=api_key, timeout=10.0)
+        _client = OpenAI(api_key=api_key, timeout=12.0)
     return _client
-
-
-def is_directed_at_webb(text: str) -> bool:
-    """Fast AI classifier: is this speech directed at Webb or background noise?"""
-    text = text.strip()
-    if not text:
-        return False
-
-    # Quick keyword check first (instant, no API call)
-    lower = text.lower()
-    direct_triggers = ["webb", "web ", "hey web", "open ", "search ", "start ", "set ",
-                       "add ", "what ", "how ", "can you", "tell me", "show me",
-                       "play ", "pause", "volume", "mute", "close ", "switch ",
-                       "type ", "lock", "screenshot", "remind", "timer", "task"]
-    for trigger in direct_triggers:
-        if trigger in lower:
-            return True
-
-    # If no keyword match, ask AI (fast model, tiny prompt)
-    try:
-        client = _get_client()
-        completion = client.chat.completions.create(
-            model="gpt-4.1-nano",  # Fastest model for classification
-            messages=[
-                {"role": "system", "content": INTENT_CLASSIFIER_PROMPT},
-                {"role": "user", "content": text},
-            ],
-            max_tokens=4,
-        )
-        answer = (completion.choices[0].message.content or "").strip().upper()
-        return answer == "WEBB"
-    except Exception:
-        # If classifier fails, default to processing (better to respond than ignore)
-        return True
 
 
 def process_message(text: str) -> Dict[str, Any]:
     """
-    Process a user message through the AI Brain.
+    Process a user message. Tries fast path first, then LLM with function calling.
     Returns: {"speak": str, "actions": list, "face": str, "action_results": list}
     """
     text = text.strip()
     if not text:
-        return {"speak": "I didn't catch that.", "actions": [], "face": "IDLE", "action_results": []}
+        return _result("I didn't catch that.", face="IDLE")
 
-    # Build messages with full context
+    # 1. Try fast path (instant, no API call)
+    fast = try_fast_path(text)
+    if fast is not None:
+        action_results = []
+        if fast["action"]:
+            res = action_registry.execute(fast["action"], fast["params"])
+            action_results.append({"name": fast["action"], "result": res.get("result", "")})
+
+        speak = fast.get("speak") or res.get("result", "Done") if fast["action"] else fast.get("speak", "")
+        conversation.add_user(text)
+        conversation.add_assistant(speak)
+        return _result(speak, action_results=action_results)
+
+    # 2. LLM with function calling
     messages = build_messages(text)
+    tools = action_registry.get_openai_tools()
 
-    # Call AI
     try:
         client = _get_client()
-        completion = client.chat.completions.create(
+        response = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
             messages=messages,
+            tools=tools if tools else None,
             max_tokens=256,
             temperature=0.7,
         )
-        content = completion.choices[0].message.content or ""
     except Exception as e:
-        return {
-            "speak": f"Sorry, I had trouble thinking: {e}",
-            "actions": [],
-            "face": "IDLE",
-            "action_results": [],
-        }
+        return _result(f"Sorry, I had trouble thinking.", face="SAD")
 
-    # Parse JSON response
-    try:
-        # Strip markdown fences if present
-        cleaned = content.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        # AI returned plain text instead of JSON — treat as conversation
-        data = {"speak": content.strip(), "actions": [], "face": "HAPPY"}
-
-    speak = str(data.get("speak", ""))
-    actions = data.get("actions", [])
-    face = str(data.get("face", "HAPPY"))
-
-    # Execute actions
+    msg = response.choices[0].message
     action_results = []
-    for action_spec in actions:
-        if not isinstance(action_spec, dict):
-            continue
-        name = action_spec.get("name", "")
-        params = action_spec.get("params", {})
-        if not isinstance(params, dict):
-            params = {}
-        result = action_registry.execute(name, params)
-        action_results.append({"name": name, "result": result})
 
-    # Record conversation
+    # 3. Handle tool calls
+    if msg.tool_calls:
+        for tc in msg.tool_calls:
+            name = tc.function.name
+            try:
+                params = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                params = {}
+
+            res = action_registry.execute(name, params)
+            action_results.append({
+                "name": name,
+                "params": params,
+                "result": res.get("result", ""),
+                "ok": res.get("ok", False),
+                "needs_confirmation": res.get("needs_confirmation", False),
+            })
+
+        # If any action needs confirmation, ask the user
+        pending = [a for a in action_results if a.get("needs_confirmation")]
+        if pending:
+            names = ", ".join(a["name"] for a in pending)
+            speak = f"Should I go ahead and {names}?"
+            conversation.add_user(text)
+            conversation.add_assistant(speak)
+            return _result(speak, action_results=action_results, face="IDLE")
+
+        # Get a spoken summary from LLM (feed tool results back)
+        follow_up_messages = messages + [
+            {"role": "assistant", "tool_calls": [
+                {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in msg.tool_calls
+            ]},
+        ]
+        for tc, ar in zip(msg.tool_calls, action_results):
+            follow_up_messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": ar.get("result", "Done"),
+            })
+
+        try:
+            summary = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+                messages=follow_up_messages,
+                max_tokens=100,
+            )
+            speak = summary.choices[0].message.content or "Done."
+        except Exception:
+            speak = "Done."
+    else:
+        # Plain text response (conversation, question, etc.)
+        speak = msg.content or ""
+
+    # Determine face from context
+    face = _pick_face(speak, action_results)
+
     conversation.add_user(text)
     conversation.add_assistant(speak)
 
+    return _result(speak, action_results=action_results, face=face)
+
+
+def process_streamed(text: str) -> tuple[list[str], list[dict]]:
+    """
+    Process a message and return sentences as they're generated.
+    Returns (sentences_list, action_results).
+    For streaming TTS — caller can start speaking the first sentence immediately.
+    """
+    text = text.strip()
+    if not text:
+        return ["I didn't catch that."], []
+
+    # Fast path
+    fast = try_fast_path(text)
+    if fast is not None:
+        action_results = []
+        if fast["action"]:
+            res = action_registry.execute(fast["action"], fast["params"])
+            action_results.append({"name": fast["action"], "result": res.get("result", "")})
+        speak = fast.get("speak") or (res.get("result", "Done") if fast["action"] else "")
+        conversation.add_user(text)
+        conversation.add_assistant(speak)
+        return [speak] if speak else ["Done."], action_results
+
+    # LLM streaming
+    messages = build_messages(text)
+    tools = action_registry.get_openai_tools()
+
+    try:
+        client = _get_client()
+        stream = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+            messages=messages,
+            tools=tools if tools else None,
+            max_tokens=256,
+            temperature=0.7,
+            stream=True,
+        )
+    except Exception:
+        return ["Sorry, I had trouble thinking."], []
+
+    # Collect streamed response
+    content_buf = ""
+    tool_calls_data: Dict[int, Dict] = {}
+    sentences = []
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta is None:
+            continue
+
+        # Collect content
+        if delta.content:
+            content_buf += delta.content
+            # Check for sentence boundaries
+            while True:
+                match = re.search(r'[.!?]\s', content_buf)
+                if match:
+                    end = match.end()
+                    sentence = content_buf[:end].strip()
+                    content_buf = content_buf[end:]
+                    if sentence:
+                        sentences.append(sentence)
+                else:
+                    break
+
+        # Collect tool calls
+        if delta.tool_calls:
+            for tc_delta in delta.tool_calls:
+                idx = tc_delta.index
+                if idx not in tool_calls_data:
+                    tool_calls_data[idx] = {"id": "", "name": "", "arguments": ""}
+                if tc_delta.id:
+                    tool_calls_data[idx]["id"] = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_calls_data[idx]["name"] = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_calls_data[idx]["arguments"] += tc_delta.function.arguments
+
+    # Flush remaining content
+    if content_buf.strip():
+        sentences.append(content_buf.strip())
+
+    # Execute tool calls
+    action_results = []
+    if tool_calls_data:
+        for idx in sorted(tool_calls_data.keys()):
+            tc = tool_calls_data[idx]
+            name = tc["name"]
+            try:
+                params = json.loads(tc["arguments"]) if tc["arguments"] else {}
+            except json.JSONDecodeError:
+                params = {}
+            res = action_registry.execute(name, params)
+            action_results.append({"name": name, "result": res.get("result", "")})
+
+        if not sentences:
+            # No spoken content generated — create a summary
+            results_text = "; ".join(r["result"] for r in action_results)
+            sentences = [results_text or "Done."]
+
+    conversation.add_user(text)
+    conversation.add_assistant(" ".join(sentences))
+
+    return sentences if sentences else ["Done."], action_results
+
+
+def _pick_face(speak: str, action_results: list) -> str:
+    """Pick an appropriate face expression based on response content."""
+    lower = speak.lower()
+    if any(w in lower for w in ["sorry", "can't", "failed", "error"]):
+        return "SAD"
+    if any(w in lower for w in ["done", "started", "opened", "set", "created"]):
+        return "HAPPY"
+    if action_results:
+        return "HAPPY"
+    return "IDLE"
+
+
+def _result(speak: str = "", face: str = "HAPPY", action_results: list = None) -> Dict[str, Any]:
     return {
         "speak": speak,
-        "actions": actions,
+        "actions": [],
         "face": face,
-        "action_results": action_results,
+        "action_results": action_results or [],
     }
 
 
+# ── Idle Nudge (kept for idle_manager) ───────────────────────
+
+NUDGE_PROMPT = "You are a supportive productivity coach. Respond with exactly one short motivational sentence (max 18 words), plain text only."
+
+
 def generate_idle_nudge() -> str:
-    """Generate a motivational nudge for idle users."""
     try:
         client = _get_client()
-    except Exception:
-        return "Ready to get back to it?"
-
-    try:
-        completion = client.chat.completions.create(
+        r = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
             messages=[
-                {"role": "system", "content": NUDGE_SYSTEM_PROMPT},
+                {"role": "system", "content": NUDGE_PROMPT},
                 {"role": "user", "content": "Give me one nudge."},
             ],
             max_tokens=48,
         )
-        content = (completion.choices[0].message.content or "").strip()
-        if content:
-            return content
+        return (r.choices[0].message.content or "").strip() or "Ready to get back to it?"
     except Exception:
-        pass
-
-    return "Ready to get back to it?"
+        return "Ready to get back to it?"
 
 
-# ── Task/Timer/Reminder Actions ──────────────────────────────
+# ── Task Actions (registered on startup) ─────────────────────
 
 def _add_task(title: str, priority: str = "medium", due_date: str = "") -> str:
     with SessionLocal() as db:
@@ -194,42 +293,35 @@ def _add_task(title: str, priority: str = "medium", due_date: str = "") -> str:
         get_serial_manager().send_face("HAPPY")
     except Exception:
         pass
+    from .notifications_hub import hub
+    hub.publish_threadsafe({"type": "task_changed"})
     return f"Task added: {title}"
 
 
 def _complete_task(title: str) -> str:
     with SessionLocal() as db:
-        task = db.query(Task).filter(
-            Task.completed.is_(False),
-            Task.title.ilike(f"%{title}%"),
-        ).first()
+        task = db.query(Task).filter(Task.completed.is_(False), Task.title.ilike(f"%{title}%")).first()
         if not task:
             return f"No active task matching '{title}'"
         task.completed = True
         db.commit()
-        task_title = task.title
-    try:
-        get_serial_manager().send_face("HAPPY")
-    except Exception:
-        pass
-    return f"Completed: {task_title}"
+        name = task.title
+    from .notifications_hub import hub
+    hub.publish_threadsafe({"type": "task_changed"})
+    return f"Completed: {name}"
 
 
-def _start_timer(duration_minutes: int = 25) -> str:
-    # We can't directly start the async timer from here, so return instruction
-    return f"Start a {duration_minutes} minute timer from the Timer page, or say the duration."
-
-
-def _set_reminder(message: str, time: str = "") -> str:
+def _delete_task(title: str) -> str:
     with SessionLocal() as db:
-        reminder = Reminder(message=message, trigger_time=time or "", repeat="none")
-        db.add(reminder)
+        task = db.query(Task).filter(Task.title.ilike(f"%{title}%")).first()
+        if not task:
+            return f"No task matching '{title}'"
+        db.delete(task)
         db.commit()
-    try:
-        get_serial_manager().send_face("REMINDER")
-    except Exception:
-        pass
-    return f"Reminder set: {message}"
+        name = task.title
+    from .notifications_hub import hub
+    hub.publish_threadsafe({"type": "task_changed"})
+    return f"Deleted task: {name}"
 
 
 def _list_tasks() -> str:
@@ -241,11 +333,147 @@ def _list_tasks() -> str:
     return "Active tasks:\n" + "\n".join(lines)
 
 
+def _start_timer(minutes: int = 25) -> str:
+    """Directly start the timer — no HTTP needed."""
+    import asyncio
+    from .routes.timer import _timer, _timer_lock, _current_status, _broadcast, _ensure_tick_task_started
+
+    async def _do():
+        await _ensure_tick_task_started()
+        async with _timer_lock:
+            _timer.state = "running"
+            _timer.duration_seconds = int(minutes) * 60
+            _timer.seconds_remaining = _timer.duration_seconds
+            _timer.last_tick_monotonic = __import__("time").monotonic()
+        status = _current_status()
+        await _broadcast(status)
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(_do(), loop).result(timeout=5)
+        else:
+            asyncio.run(_do())
+    except Exception as e:
+        return f"Timer error: {e}"
+
+    try:
+        get_serial_manager().send_face("FOCUS")
+    except Exception:
+        pass
+    return f"Timer started: {minutes} minutes"
+
+
+def _stop_timer() -> str:
+    import asyncio
+    from .routes.timer import _timer, _timer_lock, _current_status, _broadcast
+
+    async def _do():
+        async with _timer_lock:
+            _timer.state = "idle"
+            _timer.duration_seconds = 0
+            _timer.seconds_remaining = 0
+            _timer.last_tick_monotonic = 0.0
+        await _broadcast(_current_status())
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(_do(), loop).result(timeout=5)
+        else:
+            asyncio.run(_do())
+    except Exception:
+        pass
+    return "Timer stopped"
+
+
+def _pause_timer() -> str:
+    import asyncio
+    from .routes.timer import _timer, _timer_lock, _current_status, _broadcast
+
+    async def _do():
+        async with _timer_lock:
+            if _timer.state == "running":
+                _timer.state = "paused"
+        await _broadcast(_current_status())
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(_do(), loop).result(timeout=5)
+        else:
+            asyncio.run(_do())
+    except Exception:
+        pass
+    return "Timer paused"
+
+
+def _set_reminder(message: str, time: str = "") -> str:
+    with SessionLocal() as db:
+        reminder = Reminder(message=message, trigger_time=time or "", repeat="none")
+        db.add(reminder)
+        db.commit()
+    return f"Reminder set: {message}"
+
+
+def _navigate_app(page: str) -> str:
+    """Tell frontend to navigate to a page."""
+    from .notifications_hub import hub
+    hub.publish_threadsafe({"type": "navigate", "path": f"/{page.strip('/')}"})
+    return f"Showing {page}"
+
+
 def register_task_actions() -> None:
-    """Register task/timer/reminder actions in the action registry."""
+    """Register all productivity actions with proper OpenAI tool schemas."""
     r = action_registry.register
-    r("add_task", "Create a new task with title, priority (low/medium/high), and optional due_date", ["title", "priority", "due_date"], _add_task, "productivity")
-    r("complete_task", "Mark a task as complete by title (fuzzy match)", ["title"], _complete_task, "productivity")
-    r("start_timer", "Start a Pomodoro focus timer", ["duration_minutes"], _start_timer, "productivity")
-    r("set_reminder", "Set a reminder with a message and time", ["message", "time"], _set_reminder, "productivity")
-    r("list_tasks", "List all active tasks", [], lambda: _list_tasks(), "productivity")
+
+    r("add_task", "Create a new task",
+      {"type": "object", "properties": {
+          "title": {"type": "string", "description": "Task title"},
+          "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "Priority level"},
+          "due_date": {"type": "string", "description": "Due date (YYYY-MM-DD format)"},
+      }, "required": ["title"]},
+      _add_task, "green", "productivity")
+
+    r("complete_task", "Mark a task as complete by title",
+      {"type": "object", "properties": {
+          "title": {"type": "string", "description": "Task title or partial match"},
+      }, "required": ["title"]},
+      _complete_task, "green", "productivity")
+
+    r("delete_task", "Delete a task by title",
+      {"type": "object", "properties": {
+          "title": {"type": "string", "description": "Task title or partial match"},
+      }, "required": ["title"]},
+      _delete_task, "green", "productivity")
+
+    r("list_tasks", "List all active tasks",
+      {"type": "object", "properties": {}},
+      lambda: _list_tasks(), "green", "productivity")
+
+    r("start_timer", "Start a Pomodoro focus timer",
+      {"type": "object", "properties": {
+          "minutes": {"type": "integer", "description": "Duration in minutes", "default": 25},
+      }, "required": ["minutes"]},
+      _start_timer, "green", "productivity")
+
+    r("stop_timer", "Stop the running timer",
+      {"type": "object", "properties": {}},
+      lambda: _stop_timer(), "green", "productivity")
+
+    r("pause_timer", "Pause the running timer",
+      {"type": "object", "properties": {}},
+      lambda: _pause_timer(), "green", "productivity")
+
+    r("set_reminder", "Set a reminder",
+      {"type": "object", "properties": {
+          "message": {"type": "string", "description": "Reminder message"},
+          "time": {"type": "string", "description": "When to trigger (ISO datetime or natural language)"},
+      }, "required": ["message"]},
+      _set_reminder, "green", "productivity")
+
+    r("navigate_app", "Navigate the Webb dashboard to a specific page",
+      {"type": "object", "properties": {
+          "page": {"type": "string", "enum": ["tasks", "timer", "reminders", "settings"], "description": "Page to show"},
+      }, "required": ["page"]},
+      _navigate_app, "green", "productivity")
