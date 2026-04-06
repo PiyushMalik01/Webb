@@ -85,7 +85,7 @@ export function VoiceIndicator() {
         )}
       </button>
 
-      {isActive && phase !== 'idle' ? (
+      {isActive ? (
         <div className="fixed bottom-20 right-5 z-50 text-xs font-medium" style={{ color: 'var(--accent-color)' }}>
           {phase === 'listening' ? 'Listening...' :
            phase === 'processing' ? 'Thinking...' :
