@@ -46,6 +46,19 @@ def _check_and_trigger() -> None:
             except Exception:
                 pass
 
+            # Speak the reminder aloud
+            try:
+                from . import streaming_tts
+                is_alarm = "alarm" in reminder.message.lower() or "wake" in reminder.message.lower()
+                if is_alarm:
+                    # Alarm: louder, more urgent, repeat
+                    streaming_tts.speak(f"Wake up! {reminder.message}")
+                    streaming_tts.speak(f"Hey Piyush! {reminder.message}")
+                else:
+                    streaming_tts.speak(f"Reminder: {reminder.message}")
+            except Exception:
+                pass
+
             # Handle repeating reminders
             if reminder.repeat == "daily":
                 _create_next(db, reminder, timedelta(days=1))

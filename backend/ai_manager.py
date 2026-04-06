@@ -409,11 +409,110 @@ def _pause_timer() -> str:
 
 
 def _set_reminder(message: str, time: str = "") -> str:
+    trigger_time = _parse_time(time)
     with SessionLocal() as db:
-        reminder = Reminder(message=message, trigger_time=time or "", repeat="none")
+        reminder = Reminder(message=message, trigger_time=trigger_time, repeat="none")
         db.add(reminder)
         db.commit()
-    return f"Reminder set: {message}"
+    from datetime import datetime as dt
+    try:
+        display_time = dt.fromisoformat(trigger_time).strftime("%I:%M %p")
+    except Exception:
+        display_time = trigger_time
+    return f"Reminder set: {message} at {display_time}"
+
+
+def _set_alarm(time: str, message: str = "Time to wake up") -> str:
+    """Set an alarm — uses reminder system but with 'alarm' keyword for loud wake-up."""
+    trigger_time = _parse_time(time)
+    alarm_message = f"ALARM: {message}"
+    with SessionLocal() as db:
+        reminder = Reminder(message=alarm_message, trigger_time=trigger_time, repeat="none")
+        db.add(reminder)
+        db.commit()
+    from datetime import datetime as dt
+    try:
+        display_time = dt.fromisoformat(trigger_time).strftime("%I:%M %p")
+    except Exception:
+        display_time = trigger_time
+    return f"Alarm set for {display_time}: {message}"
+
+
+def _parse_time(time_str: str) -> str:
+    """Parse natural time strings into ISO format."""
+    from datetime import datetime as dt, timedelta
+
+    time_str = time_str.strip()
+    if not time_str:
+        return dt.utcnow().isoformat()
+
+    # Already ISO format
+    try:
+        dt.fromisoformat(time_str)
+        return time_str
+    except ValueError:
+        pass
+
+    now = dt.now()
+    lower = time_str.lower().strip()
+
+    # "in X minutes/hours"
+    import re
+    m = re.match(r"in\s+(\d+)\s*(min(?:ute)?s?|hours?|hrs?)", lower)
+    if m:
+        val = int(m.group(1))
+        unit = m.group(2)
+        if "hour" in unit or "hr" in unit:
+            target = now + timedelta(hours=val)
+        else:
+            target = now + timedelta(minutes=val)
+        return target.isoformat()
+
+    # "X minutes/hours"
+    m = re.match(r"(\d+)\s*(min(?:ute)?s?|hours?|hrs?)", lower)
+    if m:
+        val = int(m.group(1))
+        unit = m.group(2)
+        if "hour" in unit or "hr" in unit:
+            target = now + timedelta(hours=val)
+        else:
+            target = now + timedelta(minutes=val)
+        return target.isoformat()
+
+    # "7:30 AM", "7:30 PM", "7:30am", "7 AM"
+    m = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", lower)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2) or 0)
+        period = m.group(3)
+        if period == "pm" and hour != 12:
+            hour += 12
+        if period == "am" and hour == 12:
+            hour = 0
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)  # Next day if time already passed
+        return target.isoformat()
+
+    # "tomorrow X"
+    if lower.startswith("tomorrow"):
+        rest = lower.replace("tomorrow", "").strip()
+        tomorrow = now + timedelta(days=1)
+        m = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", rest)
+        if m:
+            hour = int(m.group(1))
+            minute = int(m.group(2) or 0)
+            period = m.group(3)
+            if period == "pm" and hour != 12:
+                hour += 12
+            if period == "am" and hour == 12:
+                hour = 0
+            target = tomorrow.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            return target.isoformat()
+        return tomorrow.replace(hour=8, minute=0, second=0).isoformat()
+
+    # Fallback: return as-is (the LLM might have given an ISO string)
+    return time_str
 
 
 def _navigate_app(page: str) -> str:
@@ -471,6 +570,13 @@ def register_task_actions() -> None:
           "time": {"type": "string", "description": "When to trigger (ISO datetime or natural language)"},
       }, "required": ["message"]},
       _set_reminder, "green", "productivity")
+
+    r("set_alarm", "Set an alarm to wake up the user at a specific time",
+      {"type": "object", "properties": {
+          "time": {"type": "string", "description": "When to ring (e.g. '7:30 AM', 'in 20 minutes', '6 AM')"},
+          "message": {"type": "string", "description": "Alarm message", "default": "Time to wake up"},
+      }, "required": ["time"]},
+      _set_alarm, "green", "productivity")
 
     r("navigate_app", "Navigate the Webb dashboard to a specific page",
       {"type": "object", "properties": {
