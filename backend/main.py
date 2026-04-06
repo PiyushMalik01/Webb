@@ -19,7 +19,8 @@ from .notifications_hub import hub
 from .reminder_scheduler import reminder_check_loop
 from .routes.timer import shutdown_timer_background
 from .serial_manager import get_serial_manager
-from . import voice_loop, activity_monitor, system_controller, ai_manager, tts_manager
+from .voice_engine import start as start_voice, stop as stop_voice
+from . import activity_monitor, system_controller, ai_manager, streaming_tts
 from .routes.activity import router as activity_router
 from .routes.system import router as system_router
 
@@ -54,7 +55,7 @@ def create_app() -> FastAPI:
         system_controller.register_all_actions()
         ai_manager.register_task_actions()
         activity_monitor.start()
-        voice_loop.start()
+        start_voice()
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
@@ -65,9 +66,9 @@ def create_app() -> FastAPI:
                 await reminder_task
             except asyncio.CancelledError:
                 pass
-        voice_loop.stop()
+        stop_voice()
         activity_monitor.stop()
-        tts_manager.shutdown()
+        streaming_tts.shutdown()
         idle_manager.stop()
         await shutdown_timer_background()
         get_serial_manager().close()

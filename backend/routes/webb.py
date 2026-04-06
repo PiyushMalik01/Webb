@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..schemas import FaceSet, WebbFaceResult, WebbStatus
 from ..serial_manager import get_serial_manager
-from .. import tts_manager
+from .. import streaming_tts
 
 router = APIRouter()
 
@@ -38,7 +38,7 @@ def speak(payload: dict) -> dict:
     text = payload.get("text", "")
     if not text:
         raise HTTPException(status_code=400, detail="No text provided")
-    tts_manager.speak(text)
+    streaming_tts.speak(text)
     return {"ok": True, "text": text}
 
 
