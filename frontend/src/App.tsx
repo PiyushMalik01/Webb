@@ -1,4 +1,5 @@
-import { Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { Route, Routes, useNavigate } from 'react-router-dom'
 import { Sidebar } from './components/Sidebar'
 import { DashboardPage } from './pages/DashboardPage'
 import { RemindersPage } from './pages/RemindersPage'
@@ -9,6 +10,22 @@ import { VoiceIndicator } from './components/VoiceIndicator'
 import { NotificationCenter } from './components/NotificationCenter'
 import { DesktopTopBar } from './components/DesktopTopBar'
 import { WebbFaceProvider } from './context/WebbFaceContext'
+import { connectNotifications } from './lib/notifications'
+
+function NavigationListener() {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    const disconnect = connectNotifications((ev) => {
+      if (ev.type === 'navigate' && 'path' in ev) {
+        navigate(ev.path as string)
+      }
+    })
+    return () => disconnect()
+  }, [navigate])
+
+  return null
+}
 
 export default function App() {
   return (
@@ -19,6 +36,7 @@ export default function App() {
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
             <Sidebar />
             <main className="flex-1 px-4 py-4 md:px-6 md:py-6">
+              <NavigationListener />
               <Routes>
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/tasks" element={<TasksPage />} />

@@ -7,6 +7,8 @@ export type NotificationEvent =
   | { type: 'wake_word'; created_at: string }
   | { type: 'voice_state'; state: string; created_at: string }
   | { type: 'action_executed'; name: string; result: string; created_at: string }
+  | { type: 'navigate'; path: string }
+  | { type: 'task_changed' }
   | { type: string; [k: string]: any }
 
 export function connectNotifications(onEvent: (ev: NotificationEvent) => void) {

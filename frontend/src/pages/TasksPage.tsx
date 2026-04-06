@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import confetti from 'canvas-confetti'
 import { apiGet, apiSend } from '../lib/api'
+import { connectNotifications } from '../lib/notifications'
 import type { Task } from '../lib/types'
 
 type Priority = 'all' | 'high' | 'medium' | 'low'
@@ -49,6 +50,15 @@ export function TasksPage() {
   useEffect(() => {
     refresh().catch((e) => setErr(String(e)))
   }, [filter])
+
+  useEffect(() => {
+    const disconnect = connectNotifications((ev) => {
+      if (ev.type === 'task_changed') {
+        refresh().catch(() => {})
+      }
+    })
+    return () => disconnect()
+  }, [])
 
   const grouped = useMemo(() => {
     const completed = tasks.filter((t) => t.completed)
