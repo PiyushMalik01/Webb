@@ -2,25 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict
+import time
+from typing import Any, Dict, List
 
 from openai import OpenAI
 
-
-SYSTEM_PROMPT = """
-You are Webb, a helpful desk companion.
-You receive short user commands as plain text and must convert them into a SINGLE JSON intent.
-
-Supported intents (choose exactly one, set only the fields you can infer):
-- add_task: { "type": "add_task", "title": str, "priority": "low"|"medium"|"high"|null, "due_date": str|null }
-- complete_task: { "type": "complete_task", "title": str|null }
-- start_timer: { "type": "start_timer", "duration_minutes": int }
-- set_reminder: { "type": "set_reminder", "message": str, "time": str }
-- list_tasks: { "type": "list_tasks" }
-- general_chat: { "type": "general_chat", "response": str }
-
-Return ONLY minified JSON, with no explanations.
-"""
+from . import action_registry
+from .context_builder import build_messages
+from .conversation_manager import conversation
+from .database import SessionLocal
+from .models import Reminder, Task
+from .serial_manager import get_serial_manager
 
 
 NUDGE_SYSTEM_PROMPT = """
@@ -36,40 +28,80 @@ def _get_client() -> OpenAI:
     return OpenAI(api_key=api_key, timeout=20.0)
 
 
-def parse_intent(text: str) -> Dict[str, Any]:
+def process_message(text: str) -> Dict[str, Any]:
     """
-    Call an OpenAI chat model to map free-form text into a structured intent dict.
-    Falls back to a simple general_chat intent when the API is unavailable.
+    Process a user message through the AI Brain.
+    Returns: {"speak": str, "actions": list, "face": str, "action_results": list}
     """
     text = text.strip()
     if not text:
-        return {"type": "general_chat", "response": "I did not hear anything."}
+        return {"speak": "I didn't catch that.", "actions": [], "face": "IDLE", "action_results": []}
 
+    # Build messages with full context
+    messages = build_messages(text)
+
+    # Call AI
     try:
         client = _get_client()
-    except Exception:
-        return {"type": "general_chat", "response": text}
-
-    try:
         completion = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-            max_tokens=256,
+            messages=messages,
+            max_tokens=512,
         )
         content = completion.choices[0].message.content or ""
-        data = json.loads(content)
-        if isinstance(data, dict) and "type" in data:
-            return data
-    except Exception:
-        pass
+    except Exception as e:
+        return {
+            "speak": f"Sorry, I had trouble thinking: {e}",
+            "actions": [],
+            "face": "IDLE",
+            "action_results": [],
+        }
 
-    return {"type": "general_chat", "response": text}
+    # Parse JSON response
+    try:
+        # Strip markdown fences if present
+        cleaned = content.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        # AI returned plain text instead of JSON — treat as conversation
+        data = {"speak": content.strip(), "actions": [], "face": "HAPPY"}
+
+    speak = str(data.get("speak", ""))
+    actions = data.get("actions", [])
+    face = str(data.get("face", "HAPPY"))
+
+    # Execute actions
+    action_results = []
+    for action_spec in actions:
+        if not isinstance(action_spec, dict):
+            continue
+        name = action_spec.get("name", "")
+        params = action_spec.get("params", {})
+        if not isinstance(params, dict):
+            params = {}
+        result = action_registry.execute(name, params)
+        action_results.append({"name": name, "result": result})
+
+    # Record conversation
+    conversation.add_user(text)
+    conversation.add_assistant(speak)
+
+    return {
+        "speak": speak,
+        "actions": actions,
+        "face": face,
+        "action_results": action_results,
+    }
 
 
 def generate_idle_nudge() -> str:
+    """Generate a motivational nudge for idle users."""
     try:
         client = _get_client()
     except Exception:
@@ -93,3 +125,69 @@ def generate_idle_nudge() -> str:
     return "Ready to get back to it?"
 
 
+# ── Task/Timer/Reminder Actions ──────────────────────────────
+
+def _add_task(title: str, priority: str = "medium", due_date: str = "") -> str:
+    with SessionLocal() as db:
+        task = Task(title=title, priority=priority or "medium", due_date=due_date or None)
+        db.add(task)
+        db.commit()
+    try:
+        get_serial_manager().send_face("HAPPY")
+    except Exception:
+        pass
+    return f"Task added: {title}"
+
+
+def _complete_task(title: str) -> str:
+    with SessionLocal() as db:
+        task = db.query(Task).filter(
+            Task.completed.is_(False),
+            Task.title.ilike(f"%{title}%"),
+        ).first()
+        if not task:
+            return f"No active task matching '{title}'"
+        task.completed = True
+        db.commit()
+        task_title = task.title
+    try:
+        get_serial_manager().send_face("HAPPY")
+    except Exception:
+        pass
+    return f"Completed: {task_title}"
+
+
+def _start_timer(duration_minutes: int = 25) -> str:
+    # We can't directly start the async timer from here, so return instruction
+    return f"Start a {duration_minutes} minute timer from the Timer page, or say the duration."
+
+
+def _set_reminder(message: str, time: str = "") -> str:
+    with SessionLocal() as db:
+        reminder = Reminder(message=message, trigger_time=time or "", repeat="none")
+        db.add(reminder)
+        db.commit()
+    try:
+        get_serial_manager().send_face("REMINDER")
+    except Exception:
+        pass
+    return f"Reminder set: {message}"
+
+
+def _list_tasks() -> str:
+    with SessionLocal() as db:
+        tasks = db.query(Task).filter(Task.completed.is_(False)).order_by(Task.created_at.desc()).limit(10).all()
+        if not tasks:
+            return "No active tasks."
+        lines = [f"- {t.title} ({t.priority})" for t in tasks]
+    return "Active tasks:\n" + "\n".join(lines)
+
+
+def register_task_actions() -> None:
+    """Register task/timer/reminder actions in the action registry."""
+    r = action_registry.register
+    r("add_task", "Create a new task with title, priority (low/medium/high), and optional due_date", ["title", "priority", "due_date"], _add_task, "productivity")
+    r("complete_task", "Mark a task as complete by title (fuzzy match)", ["title"], _complete_task, "productivity")
+    r("start_timer", "Start a Pomodoro focus timer", ["duration_minutes"], _start_timer, "productivity")
+    r("set_reminder", "Set a reminder with a message and time", ["message", "time"], _set_reminder, "productivity")
+    r("list_tasks", "List all active tasks", [], lambda: _list_tasks(), "productivity")
