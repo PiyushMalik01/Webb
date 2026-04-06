@@ -63,16 +63,19 @@ def _generate_and_play(text: str) -> None:
     model = os.getenv("OPENAI_TTS_MODEL", "tts-1")
 
     client = _get_client()
-    response = client.audio.speech.create(
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    with client.audio.speech.with_streaming_response.create(
         model=model,
         voice=voice,
         input=text,
         response_format="mp3",
-    )
-
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-        tmp_path = tmp.name
-        response.stream_to_file(tmp_path)
+    ) as response:
+        with open(tmp_path, "wb") as f:
+            for chunk in response.iter_bytes():
+                f.write(chunk)
 
     try:
         pygame.mixer.music.load(tmp_path)
