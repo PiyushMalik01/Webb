@@ -37,18 +37,29 @@ def _stt_once() -> str:
         )
 
     # Save to a temporary WAV file, then send to OpenAI audio API
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
-        with open(tmp.name, "wb") as f:
-            f.write(audio.get_wav_data())
+    # Windows NamedTemporaryFile with delete=True locks the file,
+    # so we use delete=False and clean up manually.
+    tmp_path = None
+    try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_path = tmp.name
+        tmp.write(audio.get_wav_data())
+        tmp.close()
 
         client = _get_openai_client()
-        with open(tmp.name, "rb") as f:
+        with open(tmp_path, "rb") as f:
             transcript = client.audio.transcriptions.create(
                 model=os.getenv("OPENAI_WHISPER_MODEL", "gpt-4o-mini-transcribe"),
                 file=f,
             )
 
-    return transcript.text.strip()
+        return transcript.text.strip()
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
 
 def _apply_intent(intent: Dict[str, Any]) -> str:
