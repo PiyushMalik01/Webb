@@ -30,3 +30,11 @@ export type TimerStatus = {
   duration_seconds: number
 }
 
+export type VoiceState = 'idle' | 'listening' | 'processing' | 'speaking' | 'executing'
+
+export type DisplayMode = 'FACE' | 'DASHBOARD' | 'NOTIFY'
+
+export type VoiceStatus = {
+  state: VoiceState
+}
+

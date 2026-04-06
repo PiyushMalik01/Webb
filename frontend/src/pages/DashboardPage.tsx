@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiGet } from '../lib/api'
-import type { Task, TimerStatus, Reminder } from '../lib/types'
+import type { Task, TimerStatus, Reminder, VoiceStatus } from '../lib/types'
 import { WebbPreview } from '../components/WebbPreview'
 
 export function DashboardPage() {
@@ -9,11 +9,19 @@ export function DashboardPage() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [timer, setTimer] = useState<TimerStatus>({ state: 'idle', seconds_remaining: 0, duration_seconds: 0 })
   const [reminders, setReminders] = useState<Reminder[]>([])
+  const [voiceState, setVoiceState] = useState<string>('idle')
 
   useEffect(() => {
     apiGet<Task[]>('/api/tasks/').then(setTasks).catch(() => {})
     apiGet<TimerStatus>('/api/timer/status').then(setTimer).catch(() => {})
     apiGet<Reminder[]>('/api/reminders/').then(setReminders).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const poll = setInterval(() => {
+      apiGet<VoiceStatus>('/api/voice/status').then(s => setVoiceState(s.state)).catch(() => {})
+    }, 1000)
+    return () => clearInterval(poll)
   }, [])
 
   const activeTasks = tasks.filter((t) => !t.completed).length
@@ -42,6 +50,16 @@ export function DashboardPage() {
 
       <div className="mt-4 text-sm" style={{ color: 'var(--text-muted)' }}>
         {statusLine}
+      </div>
+
+      <div className="mt-2 text-xs font-medium" style={{
+        color: voiceState !== 'idle' ? 'var(--accent-color)' : 'var(--text-muted)'
+      }}>
+        {voiceState === 'idle' ? 'Say "Hey Webb" or tap mic' :
+         voiceState === 'listening' ? 'Listening...' :
+         voiceState === 'processing' ? 'Thinking...' :
+         voiceState === 'speaking' ? 'Speaking...' :
+         voiceState === 'executing' ? 'On it...' : voiceState}
       </div>
 
       <div className="mt-8 grid w-full max-w-lg grid-cols-3 gap-3">

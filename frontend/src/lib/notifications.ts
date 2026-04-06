@@ -4,6 +4,8 @@ export type NotificationEvent =
   | { type: 'idle_nudge'; text: string; created_at: string }
   | { type: 'reminder_triggered'; text: string; reminder_id: number; created_at: string }
   | { type: 'timer_complete'; text: string; created_at: string }
+  | { type: 'voice_state'; state: string; created_at: string }
+  | { type: 'wake_word'; created_at: string }
   | { type: string; [k: string]: any }
 
 export function connectNotifications(onEvent: (ev: NotificationEvent) => void) {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiSend } from '../lib/api'
 
-type VoiceSummary = { text: string; intent: any; result_summary: string; stt_error: string }
+type VoiceSummary = { text: string; speak: string; actions: any[]; face: string; action_results: any[]; stt_error: string }
 type Phase = 'idle' | 'listening' | 'processing'
 
 export function VoiceIndicator() {
@@ -30,7 +30,7 @@ export function VoiceIndicator() {
       }
 
       const heard = summary.text ? `Heard: "${summary.text}"` : 'Heard nothing.'
-      const did = summary.result_summary ? `\n${summary.result_summary}` : ''
+      const did = summary.speak ? `\nWebb: ${summary.speak}` : ''
       setToast(`${heard}${did}`)
       setPhase('idle')
     } catch (e) {

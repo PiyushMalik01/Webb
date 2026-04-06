@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-type Face = 'IDLE' | 'HAPPY' | 'FOCUS' | 'SLEEPY' | 'REMINDER' | 'LISTENING' | 'SURPRISED'
+type Face = 'IDLE' | 'HAPPY' | 'FOCUS' | 'SLEEPY' | 'REMINDER' | 'LISTENING' | 'SURPRISED' | 'THINKING' | 'SPEAKING'
 
 function Eyes({ mood, blinking }: { mood: Face; blinking: boolean }) {
   if (blinking) {
@@ -43,6 +43,14 @@ function Eyes({ mood, blinking }: { mood: Face; blinking: boolean }) {
       </>
     )
   }
+  if (mood === 'THINKING') {
+    return (
+      <>
+        <circle cx="22" cy="16" r="2.5" stroke="currentColor" strokeWidth="2" fill="none" />
+        <circle cx="42" cy="16" r="2.5" stroke="currentColor" strokeWidth="2" fill="none" />
+      </>
+    )
+  }
   return (
     <>
       <circle cx="20" cy="18" r="2.5" stroke="currentColor" strokeWidth="2" fill="none" />
@@ -63,6 +71,9 @@ function Mouth({ mood }: { mood: Face }) {
   }
   if (mood === 'REMINDER') {
     return <path d="M24 36 Q32 32 40 36" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+  }
+  if (mood === 'SPEAKING') {
+    return <ellipse cx="32" cy="36" rx="5" ry="3" stroke="currentColor" strokeWidth="2" fill="none" />
   }
   return <path d="M26 36 L38 36" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
 }
