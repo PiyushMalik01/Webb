@@ -10,7 +10,7 @@ import serial
 from serial.tools import list_ports
 
 
-FACES = {"IDLE", "HAPPY", "FOCUS", "SLEEPY", "REMINDER", "LISTENING", "SURPRISED"}
+FACES = {"IDLE", "HAPPY", "FOCUS", "SLEEPY", "REMINDER", "LISTENING", "SURPRISED", "THINKING", "SPEAKING"}
 
 
 @dataclass(frozen=True)
@@ -87,6 +87,16 @@ class SerialManager:
         with self._lock:
             self._disconnect_locked()
 
+    def send_command(self, cmd: str) -> None:
+        """Send an arbitrary rich-protocol command (e.g. ``FACE:HAPPY``,
+        ``TEXT:1:Hello``) over serial.  The command is transmitted as-is
+        with a trailing newline."""
+        with self._lock:
+            if self._ser is None or not self._ser.is_open:
+                raise RuntimeError("Serial not connected")
+            self._ser.write((cmd + "\n").encode("utf-8"))
+            self._ser.flush()
+
     def send_face(self, face: str, timeout_s: float = 1.5) -> None:
         face = face.strip().upper()
         if face not in FACES:
@@ -101,7 +111,11 @@ class SerialManager:
             except Exception:
                 pass
 
-            self._ser.write((face + "\n").encode("utf-8"))
+            protocol = os.getenv("DISPLAY_PROTOCOL", "").lower()
+            if protocol == "rich":
+                self._ser.write((f"FACE:{face}\n").encode("utf-8"))
+            else:
+                self._ser.write((face + "\n").encode("utf-8"))
             self._ser.flush()
 
             self._ser.timeout = timeout_s
@@ -123,6 +137,22 @@ class SerialManager:
             # Non-empty but unexpected line: record it for status but don't fail the call.
             self._last_face = face
             self._last_error = f"Unexpected reply: {line!r}"
+
+    def send_text(self, line: int, content: str) -> None:
+        """Send a ``TEXT:<line>:<content>`` command to the display."""
+        self.send_command(f"TEXT:{line}:{content}")
+
+    def send_notify(self, msg: str) -> None:
+        """Send a ``NOTIFY:<msg>`` command to the display."""
+        self.send_command(f"NOTIFY:{msg}")
+
+    def send_mode(self, mode: str) -> None:
+        """Send a ``MODE:<mode>`` command to the display."""
+        self.send_command(f"MODE:{mode}")
+
+    def send_anim(self, name: str) -> None:
+        """Send an ``ANIM:<name>`` command to the display."""
+        self.send_command(f"ANIM:{name}")
 
     def _disconnect_locked(self) -> None:
         if self._ser is not None:
