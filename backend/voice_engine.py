@@ -30,8 +30,6 @@ _pending_lock = threading.Lock()
 _process_event = threading.Event()
 _stop_event = threading.Event()
 _process_thread: Optional[threading.Thread] = None
-
-# Follow-up tracking
 _follow_up_deadline: float = 0.0
 
 
@@ -45,7 +43,6 @@ def _set_state(new_state: VoiceState) -> None:
     with _state_lock:
         _state = new_state
 
-    # Update ESP32 face
     face_map = {
         VoiceState.IDLE: "IDLE",
         VoiceState.LISTENING: "LISTENING",
@@ -61,10 +58,9 @@ def _set_state(new_state: VoiceState) -> None:
         pass
 
 
-# ── STT ──────────────────────────────────────────────────────
+# ── STT (in-memory, no temp files) ──────────────────────────
 
 def _transcribe(audio: np.ndarray) -> str:
-    """Transcribe audio using Whisper. In-memory, no temp files."""
     try:
         from openai import OpenAI
 
@@ -72,11 +68,10 @@ def _transcribe(audio: np.ndarray) -> str:
         if not api_key:
             return ""
 
-        # Encode as WAV in memory
         buf = io.BytesIO()
         with wave.open(buf, 'wb') as wf:
             wf.setnchannels(1)
-            wf.setsampwidth(2)  # 16-bit
+            wf.setsampwidth(2)
             wf.setframerate(16000)
             wf.writeframes(audio.astype(np.int16).tobytes())
         buf.seek(0)
@@ -96,37 +91,29 @@ def _transcribe(audio: np.ndarray) -> str:
 
 # ── Gate ─────────────────────────────────────────────────────
 
-# Keywords that indicate speech is directed at Webb
 TRIGGER_KEYWORDS = [
     "webb", "web", "hey", "open", "close", "search", "start", "stop",
     "set", "add", "what", "how", "can you", "tell me", "show me",
     "play", "pause", "volume", "mute", "switch", "type", "lock",
     "screenshot", "remind", "timer", "task", "delete", "list",
     "minimize", "maximize", "brightness", "next", "previous",
+    "alarm", "wake",
 ]
 
 
 def _is_for_webb(text: str) -> bool:
-    """Fast keyword check — is this speech directed at Webb?"""
     lower = text.lower().strip()
     if len(lower) < 2:
         return False
-
-    # Direct keyword match
     for kw in TRIGGER_KEYWORDS:
         if kw in lower:
             return True
-
-    # If 4+ words and contains a verb-like word, probably a command
-    words = lower.split()
-    if len(words) >= 4:
+    if len(lower.split()) >= 4:
         return True
-
     return False
 
 
 def _strip_trigger(text: str) -> str:
-    """Remove leading trigger words."""
     lower = text.lower().strip()
     for prefix in ["hey webb ", "hey web ", "hi webb ", "hi web ",
                     "okay webb ", "ok webb ", "yo webb ", "webb ", "web "]:
@@ -135,39 +122,29 @@ def _strip_trigger(text: str) -> str:
     return text
 
 
-# ── Speech Handler (called by AudioEngine) ───────────────────
+# ── Speech Handler ───────────────────────────────────────────
 
 def _on_speech(audio: np.ndarray) -> None:
-    """Called by AudioEngine when a complete utterance is captured."""
-    global _follow_up_deadline
-
     current = get_state()
 
-    # If muted (speaking), ignore
+    # Ignore during speaking (mute-on-speak)
     if current == VoiceState.SPEAKING:
         return
 
-    # In follow-up mode: accept all speech without gate check
-    if current == VoiceState.FOLLOW_UP:
-        with _pending_lock:
-            _pending_audio.clear()
-            _pending_audio.append(audio)
-        _process_event.set()
+    # Ignore if already busy (processing/executing)
+    if current in (VoiceState.PROCESSING, VoiceState.EXECUTING, VoiceState.LISTENING):
         return
 
-    # In idle mode: need to pass the gate
-    if current in (VoiceState.IDLE,):
-        with _pending_lock:
-            _pending_audio.clear()
-            _pending_audio.append(audio)
-        _process_event.set()
-        return
+    # Accept in follow-up or idle
+    with _pending_lock:
+        _pending_audio.clear()
+        _pending_audio.append(audio)
+    _process_event.set()
 
-    # Otherwise (processing, executing): ignore new audio
 
+# ── Process Loop ─────────────────────────────────────────────
 
 def _process_loop() -> None:
-    """Background thread that processes captured speech."""
     global _follow_up_deadline
 
     follow_up_timeout = float(os.getenv("FOLLOW_UP_TIMEOUT_MS", "5000")) / 1000.0
@@ -177,16 +154,16 @@ def _process_loop() -> None:
         if get_state() == VoiceState.FOLLOW_UP:
             if time.time() > _follow_up_deadline:
                 _set_state(VoiceState.IDLE)
-                engine = get_audio_engine()
-                engine.set_silence_duration(int(os.getenv("VAD_SILENCE_MS", "800")))
+                try:
+                    get_audio_engine().set_silence_duration(int(os.getenv("VAD_SILENCE_MS", "800")))
+                except Exception:
+                    pass
 
-        # Wait for speech event
-        triggered = _process_event.wait(timeout=0.2)
+        triggered = _process_event.wait(timeout=0.3)
         if not triggered:
             continue
         _process_event.clear()
 
-        # Get audio
         with _pending_lock:
             if not _pending_audio:
                 continue
@@ -196,108 +173,152 @@ def _process_loop() -> None:
 
         # Transcribe
         _set_state(VoiceState.LISTENING)
-        text = _transcribe(audio)
+        try:
+            text = _transcribe(audio)
+        except Exception as e:
+            print(f"[voice] Transcribe failed: {e}")
+            _set_state(VoiceState.IDLE)
+            continue
 
         if not text or len(text.strip()) < 2:
-            if current == VoiceState.FOLLOW_UP:
-                _set_state(VoiceState.FOLLOW_UP)
-            else:
-                _set_state(VoiceState.IDLE)
+            _set_state(VoiceState.FOLLOW_UP if current == VoiceState.FOLLOW_UP else VoiceState.IDLE)
             continue
 
         print(f"[voice] Heard: \"{text}\"")
 
-        # Gate check (skip in follow-up mode)
+        # Gate check (skip in follow-up)
         in_follow_up = current == VoiceState.FOLLOW_UP
         if not in_follow_up and not _is_for_webb(text):
             print(f"[voice] Not for Webb, ignoring")
             _set_state(VoiceState.IDLE)
             continue
 
-        # Strip trigger words
         command = _strip_trigger(text)
-        print(f"[voice] Processing: \"{command}\"")
+        print(f"[voice] Command: \"{command}\"")
 
-        # Process and respond
-        _handle_command(command)
+        # Process with timeout protection
+        try:
+            _handle_command(command)
+        except Exception as e:
+            print(f"[voice] Command failed: {e}")
+            _set_state(VoiceState.IDLE)
+            continue
 
         # Enter follow-up window
         _follow_up_deadline = time.time() + follow_up_timeout
         _set_state(VoiceState.FOLLOW_UP)
-
-        # Shorten silence detection for follow-up
-        engine = get_audio_engine()
-        engine.set_silence_duration(500)
+        try:
+            get_audio_engine().set_silence_duration(500)
+        except Exception:
+            pass
 
 
 def _handle_command(text: str) -> None:
-    """Process a command through the AI brain with streaming TTS."""
     from . import ai_manager
     from . import streaming_tts
 
     _set_state(VoiceState.PROCESSING)
 
-    # Use streaming for natural sentence-by-sentence speech
-    sentences, action_results = ai_manager.process_streamed(text)
+    try:
+        sentences, action_results = ai_manager.process_streamed(text)
+    except Exception as e:
+        print(f"[voice] AI error: {e}")
+        _set_state(VoiceState.IDLE)
+        return
 
     if action_results:
         _set_state(VoiceState.EXECUTING)
 
-    # Speak sentences — each one starts playing as soon as it's generated
     if sentences:
         _set_state(VoiceState.SPEAKING)
         for sentence in sentences:
             if sentence.strip():
-                streaming_tts.speak_sync(sentence)
+                try:
+                    streaming_tts.speak_sync(sentence)
+                except Exception:
+                    pass
 
 
-# ── Manual Trigger ───────────────────────────────────────────
+# ── Manual Trigger (non-blocking) ────────────────────────────
+
+_manual_result: Optional[Dict[str, Any]] = None
+_manual_done = threading.Event()
+
 
 def trigger_manual() -> Dict[str, Any]:
-    """Manual mic button trigger. Captures speech and processes it."""
+    """
+    Manual mic button. Runs in a background thread to not block FastAPI.
+    Uses a short recording window with VAD-based end detection.
+    """
+    global _manual_result
+
     if get_state() not in (VoiceState.IDLE, VoiceState.FOLLOW_UP):
         return {"speak": "I'm already busy.", "actions": [], "face": "IDLE", "action_results": []}
 
-    engine = get_audio_engine()
+    _manual_done.clear()
+    _manual_result = None
 
-    # Briefly unmute if muted
+    t = threading.Thread(target=_manual_capture_and_process, daemon=True)
+    t.start()
+    t.join(timeout=30)  # Max 30s timeout
+
+    if _manual_result is not None:
+        return _manual_result
+
+    _set_state(VoiceState.IDLE)
+    return {"speak": "Something went wrong.", "actions": [], "face": "IDLE", "action_results": []}
+
+
+def _manual_capture_and_process():
+    global _manual_result, _follow_up_deadline
+
+    engine = get_audio_engine()
     was_muted = engine.muted
     if was_muted:
         engine.unmute()
 
     _set_state(VoiceState.LISTENING)
 
-    # Capture directly using sounddevice (bypass the callback for manual trigger)
+    # Record for up to 6 seconds
     import sounddevice as sd
-
-    duration = float(os.getenv("VOICE_PHRASE_TIME_LIMIT_SECS", "8"))
     try:
+        duration = 6.0
         recording = sd.rec(
             int(duration * 16000),
             samplerate=16000,
             channels=1,
             dtype='int16',
-            blocking=True,
         )
+        sd.wait()  # Wait for recording to finish
         audio = recording[:, 0]
     except Exception as e:
+        _manual_result = {"speak": "", "actions": [], "face": "IDLE", "action_results": [], "stt_error": str(e)}
         _set_state(VoiceState.IDLE)
-        return {"speak": "", "actions": [], "face": "IDLE", "action_results": [], "stt_error": str(e)}
+        return
 
     # Transcribe
     text = _transcribe(audio)
     if not text:
+        _manual_result = {"speak": "I didn't hear anything.", "actions": [], "face": "IDLE", "action_results": []}
         _set_state(VoiceState.IDLE)
-        return {"speak": "I didn't hear anything.", "actions": [], "face": "IDLE", "action_results": []}
+        return
+
+    text = _strip_trigger(text)
+    print(f"[voice] Manual: \"{text}\"")
 
     # Process
     from . import ai_manager
     from . import streaming_tts
 
     _set_state(VoiceState.PROCESSING)
-    sentences, action_results = ai_manager.process_streamed(text)
+    try:
+        sentences, action_results = ai_manager.process_streamed(text)
+    except Exception as e:
+        _manual_result = {"speak": "Sorry, something went wrong.", "actions": [], "face": "SAD", "action_results": []}
+        _set_state(VoiceState.IDLE)
+        return
 
-    speak = " ".join(sentences)
+    speak = " ".join(s for s in sentences if s.strip())
 
     if sentences:
         _set_state(VoiceState.SPEAKING)
@@ -305,12 +326,10 @@ def trigger_manual() -> Dict[str, Any]:
             if s.strip():
                 streaming_tts.speak(s)
 
-    # Enter follow-up
-    global _follow_up_deadline
     _follow_up_deadline = time.time() + 5.0
     _set_state(VoiceState.FOLLOW_UP)
 
-    return {
+    _manual_result = {
         "text": text,
         "speak": speak,
         "actions": [],
@@ -321,7 +340,6 @@ def trigger_manual() -> Dict[str, Any]:
 
 
 def interrupt() -> None:
-    """Interrupt current speech/processing."""
     from . import streaming_tts
     streaming_tts.interrupt()
     _set_state(VoiceState.IDLE)
@@ -330,7 +348,6 @@ def interrupt() -> None:
 # ── Start / Stop ─────────────────────────────────────────────
 
 def start() -> None:
-    """Start the voice engine."""
     global _process_thread
 
     mode = os.getenv("VOICE_MODE", "passive")
@@ -338,20 +355,17 @@ def start() -> None:
         print("[voice] Voice engine disabled")
         return
 
-    # Start audio engine with speech callback
     engine = get_audio_engine()
     engine._on_speech = _on_speech
 
-    # Set up mute-on-speak callbacks
     from . import streaming_tts
     streaming_tts.set_callbacks(
         on_start=lambda: engine.mute(),
-        on_end=lambda: (time.sleep(0.3), engine.unmute()),  # 300ms grace period
+        on_end=lambda: _delayed_unmute(engine),
     )
 
     engine.start()
 
-    # Start processing thread
     if _process_thread is None or not _process_thread.is_alive():
         _stop_event.clear()
         _process_thread = threading.Thread(target=_process_loop, daemon=True)
@@ -360,16 +374,26 @@ def start() -> None:
     print(f"[voice] Engine started (mode={mode})")
 
 
+def _delayed_unmute(engine):
+    """Unmute after a short delay to avoid echo."""
+    time.sleep(0.3)
+    engine.unmute()
+
+
 def stop() -> None:
-    """Stop the voice engine."""
     _stop_event.set()
-    _process_event.set()  # Unblock the wait
+    _process_event.set()
 
-    engine = get_audio_engine()
-    engine.stop()
+    try:
+        get_audio_engine().stop()
+    except Exception:
+        pass
 
-    from . import streaming_tts
-    streaming_tts.shutdown()
+    try:
+        from . import streaming_tts
+        streaming_tts.shutdown()
+    except Exception:
+        pass
 
     if _process_thread is not None:
         _process_thread.join(timeout=3.0)
