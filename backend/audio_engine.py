@@ -200,7 +200,8 @@ class AudioEngine:
 
         try:
             prob = vad(tensor, self._sr).item()
-        except Exception:
+        except Exception as e:
+            print(f"[audio] VAD error: {e}")
             return
 
         if prob >= self._vad_threshold:
@@ -231,12 +232,16 @@ class AudioEngine:
                     if total_speech >= self._min_speech_samples:
                         # Deliver complete utterance
                         audio = np.concatenate(self._speech_buf)
+                        duration_s = len(audio) / self._sr
+                        print(f"[audio] Speech captured: {duration_s:.1f}s ({len(audio)} samples)")
                         self._speech_buf.clear()
                         self._speech_counter = 0
                         self._silence_counter = 0
 
                         if self._on_speech is not None:
                             self._on_speech(audio)
+                        else:
+                            print("[audio] WARNING: no on_speech callback set!")
                     else:
                         # Too short — discard (click, cough, etc.)
                         self._speech_buf.clear()
