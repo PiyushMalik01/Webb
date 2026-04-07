@@ -230,9 +230,21 @@ def process_streamed(text: str) -> tuple[list[str], list[dict]]:
             action_results.append({"name": name, "result": res.get("result", "")})
 
         if not sentences:
-            # No spoken content generated — create a summary
-            results_text = "; ".join(r["result"] for r in action_results)
-            sentences = [results_text or "Done."]
+            # Tools were called but no spoken response — get a natural summary from LLM
+            results_text = ", ".join(f'{r["name"]}: {r["result"]}' for r in action_results)
+            try:
+                client = _get_client()
+                summary = client.chat.completions.create(
+                    model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+                    messages=[
+                        {"role": "system", "content": "You are Webb, a friendly desk assistant. Summarize what you just did in one short natural sentence. Don't mention function names or technical details. Speak like a human."},
+                        {"role": "user", "content": f"I did these actions: {results_text}. Summarize naturally."},
+                    ],
+                    max_tokens=60,
+                )
+                sentences = [summary.choices[0].message.content.strip()]
+            except Exception:
+                sentences = ["Done."]
 
     conversation.add_user(text)
     conversation.add_assistant(" ".join(sentences))
