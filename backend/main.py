@@ -20,7 +20,7 @@ from .reminder_scheduler import reminder_check_loop
 from .routes.timer import shutdown_timer_background
 from .serial_manager import get_serial_manager
 from .voice_engine import start as start_voice, stop as stop_voice
-from . import activity_monitor, system_controller, ai_manager, streaming_tts
+from . import activity_monitor, system_controller, ai_manager, streaming_tts, windows_api
 from .routes.activity import router as activity_router
 from .routes.system import router as system_router
 
@@ -53,6 +53,7 @@ def create_app() -> FastAPI:
         app.state.reminder_task = asyncio.create_task(reminder_check_loop())
 
         system_controller.register_all_actions()
+        windows_api.register_windows_actions()
         ai_manager.register_task_actions()
         activity_monitor.start()
         start_voice()
