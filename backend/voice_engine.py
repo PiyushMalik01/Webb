@@ -94,11 +94,16 @@ def _transcribe(audio: np.ndarray) -> str:
 
         client = OpenAI(api_key=api_key, timeout=10.0)
         transcript = client.audio.transcriptions.create(
-            model=os.getenv("OPENAI_WHISPER_MODEL", "gpt-4o-mini-transcribe"),
+            model=os.getenv("OPENAI_WHISPER_MODEL", "whisper-1"),
             file=buf,
             language="en",
+            prompt="Webb is a desk assistant. The user speaks English commands like: hey webb, open chrome, set a timer, add a task.",
         )
-        return transcript.text.strip()
+        text = transcript.text.strip()
+        # Filter out non-English characters
+        import re
+        text = re.sub(r'[^\x00-\x7F]+', '', text).strip()
+        return text
     except Exception as e:
         _log(f"[voice] STT error: {e}")
         return ""
