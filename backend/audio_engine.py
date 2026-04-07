@@ -20,12 +20,8 @@ def _get_vad():
     global _vad_model
     with _vad_lock:
         if _vad_model is None:
-            _vad_model, _ = torch.hub.load(
-                repo_or_dir='snakers4/silero-vad',
-                model='silero_vad',
-                trust_repo=True,
-            )
-            _vad_model.eval()
+            from silero_vad import load_silero_vad
+            _vad_model = load_silero_vad()
         return _vad_model
 
 
