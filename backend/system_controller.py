@@ -144,34 +144,30 @@ def show_desktop() -> str:
 # ── Volume / Media ────────────────────────────────────────────
 
 def set_volume(action: str) -> str:
+    """Control volume using keyboard simulation (works reliably on all Windows)."""
     try:
-        from ctypes import cast, POINTER
-        from comtypes import CLSCTX_ALL
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume = cast(interface, POINTER(IAudioEndpointVolume))
-
+        import pyautogui
         action = action.lower().strip()
-        current = volume.GetMasterVolumeLevelScalar()
 
         if action in ("up", "increase"):
-            volume.SetMasterVolumeLevelScalar(min(1.0, current + 0.1), None)
-            return f"Volume up to {int(min(1.0, current + 0.1) * 100)}%"
+            pyautogui.press("volumeup", presses=3)
+            return "Volume up"
         elif action in ("down", "decrease"):
-            volume.SetMasterVolumeLevelScalar(max(0.0, current - 0.1), None)
-            return f"Volume down to {int(max(0.0, current - 0.1) * 100)}%"
+            pyautogui.press("volumedown", presses=3)
+            return "Volume down"
         elif action in ("mute", "unmute", "toggle"):
-            muted = volume.GetMute()
-            volume.SetMute(not muted, None)
-            return "Unmuted" if muted else "Muted"
+            pyautogui.press("volumemute")
+            return "Volume mute toggled"
         else:
-            # Try to parse as a percentage
             try:
                 pct = int(action.replace("%", ""))
-                volume.SetMasterVolumeLevelScalar(max(0.0, min(1.0, pct / 100)), None)
-                return f"Volume set to {pct}%"
+                # Set to specific level: mute first, then press up proportionally
+                pyautogui.press("volumemute")
+                time.sleep(0.1)
+                pyautogui.press("volumemute")  # Unmute
+                presses = pct // 2  # Each press is ~2%
+                pyautogui.press("volumeup", presses=presses, interval=0.02)
+                return f"Volume set to ~{pct}%"
             except ValueError:
                 return f"Unknown volume action: {action}"
     except Exception as e:

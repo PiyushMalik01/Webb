@@ -493,7 +493,9 @@ def list_windows() -> str:
         return "No windows found"
     lines = []
     for w in windows[:25]:
-        lines.append(f"[Mon {w.monitor}] {w.title}")
+        # Sanitize title for safe printing
+        safe_title = w.title.encode("ascii", errors="replace").decode()
+        lines.append(f"[Mon {w.monitor}] {safe_title}")
     return "Open windows:\n" + "\n".join(lines)
 
 
