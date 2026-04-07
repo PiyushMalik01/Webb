@@ -11,6 +11,14 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 
+def _log(msg: str) -> None:
+    """Print that handles Unicode on Windows console."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", errors="replace").decode())
+
+
 class VoiceState(str, Enum):
     IDLE = "idle"
     LISTENING = "listening"
@@ -92,7 +100,7 @@ def _transcribe(audio: np.ndarray) -> str:
         )
         return transcript.text.strip()
     except Exception as e:
-        print(f"[voice] STT error: {e}")
+        _log(f"[voice] STT error: {e}")
         return ""
 
 
@@ -190,25 +198,25 @@ def _process_loop() -> None:
         in_follow_up = current == VoiceState.FOLLOW_UP
 
         # Transcribe
-        print("[voice] Transcribing...")
+        _log("[voice] Transcribing...")
         _set_state(VoiceState.LISTENING)
         try:
             text = _transcribe(audio)
         except Exception as e:
-            print(f"[voice] Transcribe error: {e}")
+            _log(f"[voice] Transcribe error: {e}")
             _set_state(VoiceState.IDLE)
             continue
 
         if not text or len(text.strip()) < 2:
-            print("[voice] Empty transcription, ignoring")
+            _log("[voice] Empty transcription, ignoring")
             _set_state(VoiceState.FOLLOW_UP if in_follow_up else VoiceState.IDLE)
             continue
 
-        print(f"[voice] Heard: \"{text}\"")
+        _log(f"[voice] Heard: \"{text}\"")
 
         # Gate check (skip in follow-up)
         if not in_follow_up and not _is_for_webb(text):
-            print(f"[voice] Not for Webb, ignoring")
+            _log(f"[voice] Not for Webb, ignoring")
             _set_state(VoiceState.IDLE)
             continue
 
@@ -217,13 +225,13 @@ def _process_loop() -> None:
             _set_state(VoiceState.IDLE)
             continue
 
-        print(f"[voice] Command: \"{command}\"")
+        _log(f"[voice] Command: \"{command}\"")
 
         # Process
         try:
             _handle_command(command)
         except Exception as e:
-            print(f"[voice] Command error: {e}")
+            _log(f"[voice] Command error: {e}")
 
         # Enter follow-up window
         _follow_up_deadline = time.time() + follow_up_timeout
@@ -245,7 +253,7 @@ def _handle_command(text: str) -> None:
     try:
         sentences, action_results = ai_manager.process_streamed(text)
     except Exception as e:
-        print(f"[voice] AI error: {e}")
+        _log(f"[voice] AI error: {e}")
         _set_state(VoiceState.IDLE)
         return
 
@@ -260,7 +268,7 @@ def _handle_command(text: str) -> None:
                 try:
                     streaming_tts.speak_sync(s)
                 except Exception as e:
-                    print(f"[voice] TTS error: {e}")
+                    _log(f"[voice] TTS error: {e}")
 
 
 # ── Manual Trigger ───────────────────────────────────────────
@@ -306,7 +314,7 @@ def trigger_manual() -> Dict[str, Any]:
             return {"speak": "I didn't hear anything.", "actions": [], "face": "IDLE", "action_results": []}
 
         text = _strip_trigger(text)
-        print(f"[voice] Manual: \"{text}\"")
+        _log(f"[voice] Manual: \"{text}\"")
 
         # Process
         from . import ai_manager
@@ -358,7 +366,7 @@ def start() -> None:
 
     mode = os.getenv("VOICE_MODE", "passive")
     if mode == "disabled":
-        print("[voice] Voice engine disabled")
+        _log("[voice] Voice engine disabled")
         return
 
     # Start audio engine
@@ -381,7 +389,7 @@ def start() -> None:
         _proc_thread = threading.Thread(target=_process_loop, daemon=True)
         _proc_thread.start()
 
-    print(f"[voice] Engine started (mode={mode})")
+    _log(f"[voice] Engine started (mode={mode})")
 
 
 def _delayed_unmute(engine):
