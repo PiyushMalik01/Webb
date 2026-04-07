@@ -87,8 +87,8 @@ def build_system_prompt() -> str:
     next_reminder = _get_next_reminder()
 
     # Import action descriptions
-    from .action_registry import describe_for_ai
-    action_descriptions = describe_for_ai()
+    from .action_registry import describe_for_prompt
+    action_descriptions = describe_for_prompt()
 
     return f"""You are Webb, a personal AI desk assistant. You sit on {user_name}'s desk as a physical bot with a display face.
 
