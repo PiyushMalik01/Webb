@@ -549,6 +549,7 @@ void handleSerialCommand(String line) {
     int newMood = webbFaceToMood(payload);
     setMoodTargets(newMood);
     lookTX = lookTY = 0;
+    if (displayMode == MODE_IMAGE) tft.fillScreen(TFT_BLACK);
     displayMode = MODE_FACE;
     Serial.println("OK:" + payload);
   }
@@ -646,20 +647,15 @@ void processSerial() {
         return;
       }
 
-      // Read JPEG data
-      uint32_t received = 0;
-      t0 = millis();
-      while (received < jpegLen && (millis() - t0) < 5000) {
-        if (Serial.available()) {
-          jpegBuf[received++] = Serial.read();
-        }
-      }
+      // Read JPEG data in bulk
+      Serial.setTimeout(5000);
+      size_t received = Serial.readBytes(jpegBuf, jpegLen);
 
       if (received == jpegLen) {
         displayJpeg(jpegBuf, jpegLen);
         Serial.printf("OK:IMG:%u\n", jpegLen);
       } else {
-        Serial.printf("ERR:IMG:SHORT:%u/%u\n", received, jpegLen);
+        Serial.printf("ERR:IMG:SHORT:%u/%u\n", (uint32_t)received, jpegLen);
       }
       return;
     }
@@ -798,6 +794,7 @@ void tick() {
 // ══════════════════════════════════════════════════════════════
 
 void setup() {
+  Serial.setRxBufferSize(32768);
   Serial.begin(115200);
   delay(500);
   Serial.println("\n=== Webb Desk Bot ===");
