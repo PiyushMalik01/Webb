@@ -97,6 +97,14 @@ class SerialManager:
             self._ser.write((cmd + "\n").encode("utf-8"))
             self._ser.flush()
 
+    def send_raw(self, data: bytes) -> None:
+        """Write raw bytes to serial without newline. Used for binary protocols."""
+        with self._lock:
+            if self._ser is None or not self._ser.is_open:
+                raise RuntimeError("Serial not connected")
+            self._ser.write(data)
+            self._ser.flush()
+
     def send_face(self, face: str, timeout_s: float = 1.5) -> None:
         face = face.strip().upper()
         if face not in FACES:
