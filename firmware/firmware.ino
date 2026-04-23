@@ -888,10 +888,12 @@ void setup() {
   TJpgDec.setCallback(tjpg_output);
 
   // ── WiFi connect ──
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("WiFi connecting");
   unsigned long wifiStart = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 10000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 15000) {
     delay(250);
     Serial.print(".");
   }
@@ -918,7 +920,17 @@ void setup() {
   Serial.println("OK:READY");
 }
 
+unsigned long lastWifiCheck = 0;
+
 void loop() {
+  // Reconnect WiFi if dropped
+  if (millis() - lastWifiCheck > 5000) {
+    lastWifiCheck = millis();
+    if (WiFi.status() != WL_CONNECTED) {
+      WiFi.reconnect();
+    }
+  }
+
   // Check WiFi image server + serial
   processTcpClient();
   processSerial();

@@ -32,9 +32,13 @@ def send_image(jpeg_bytes: bytes) -> None:
 
     host = _get_esp32_host()
     if host:
-        _send_tcp(host, header + jpeg_bytes)
-    else:
-        _send_serial(header, jpeg_bytes)
+        try:
+            _send_tcp(host, header + jpeg_bytes)
+            return
+        except Exception as e:
+            print(f"[display] WiFi failed ({host}:{TCP_PORT}): {e}, trying serial...")
+
+    _send_serial(header, jpeg_bytes)
 
 
 def send_command(cmd: str) -> None:
