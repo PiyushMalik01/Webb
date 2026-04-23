@@ -611,7 +611,7 @@ void processTcpClient() {
   WiFiClient client = imgServer.available();
   if (!client) return;
 
-  client.setTimeout(5);
+  client.setTimeout(5000);
   while (client.connected()) {
     if (!client.available()) { delay(1); continue; }
 
