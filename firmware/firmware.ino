@@ -22,9 +22,19 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <TJpg_Decoder.h>
+#include <WiFi.h>
+#include <ESPmDNS.h>
+
+// ── WiFi credentials ───────────────────────────────────────
+const char* WIFI_SSID = "EACCESS";
+const char* WIFI_PASS = "hostelnet";
+
+#define IMG_TCP_PORT 3456
 
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite spr = TFT_eSprite(&tft);
+
+WiFiServer imgServer(IMG_TCP_PORT);
 
 // ── Display layout ──────────────────────────────────────────
 #define SPR_W 320
@@ -595,6 +605,46 @@ void handleSerialCommand(String line) {
   }
 }
 
+// ── WiFi TCP image receiver ────────────────────────────────
+
+void processTcpClient() {
+  WiFiClient client = imgServer.available();
+  if (!client) return;
+
+  client.setTimeout(5);
+  while (client.connected()) {
+    if (!client.available()) { delay(1); continue; }
+
+    uint8_t cmd = client.read();
+    if (cmd == 0x10) {
+      uint8_t lenBuf[4];
+      if (client.readBytes(lenBuf, 4) != 4) {
+        client.println("ERR:IMG:TIMEOUT_LEN");
+        break;
+      }
+      uint32_t jpegLen = ((uint32_t)lenBuf[0] << 24) |
+                         ((uint32_t)lenBuf[1] << 16) |
+                         ((uint32_t)lenBuf[2] << 8)  |
+                         ((uint32_t)lenBuf[3]);
+
+      if (jpegLen > JPEG_BUF_SIZE) {
+        client.printf("ERR:IMG:TOO_BIG:%u\n", jpegLen);
+        break;
+      }
+
+      size_t received = client.readBytes(jpegBuf, jpegLen);
+      if (received == jpegLen) {
+        displayJpeg(jpegBuf, jpegLen);
+        client.printf("OK:IMG:%u\n", jpegLen);
+      } else {
+        client.printf("ERR:IMG:SHORT:%u/%u\n", (uint32_t)received, jpegLen);
+      }
+    }
+    break;
+  }
+  client.stop();
+}
+
 // ── JPEG decode callback ───────────────────────────────────
 
 bool tjpg_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
@@ -824,6 +874,25 @@ void setup() {
   TJpgDec.setJpgScale(1);
   TJpgDec.setCallback(tjpg_output);
 
+  // ── WiFi connect ──
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("WiFi connecting");
+  unsigned long wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 10000) {
+    delay(250);
+    Serial.print(".");
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("\nWiFi OK: %s\n", WiFi.localIP().toString().c_str());
+    if (MDNS.begin("webb")) {
+      Serial.println("mDNS: webb.local");
+    }
+    imgServer.begin();
+    Serial.printf("TCP image server on port %d\n", IMG_TCP_PORT);
+  } else {
+    Serial.println("\nWiFi FAILED — serial only");
+  }
+
   void *p = spr.createSprite(SPR_W, SPR_H);
   Serial.printf("Sprite: %s, heap: %d\n", p ? "OK" : "FAIL", ESP.getFreeHeap());
 
@@ -837,7 +906,8 @@ void setup() {
 }
 
 void loop() {
-  // Always check serial
+  // Check WiFi image server + serial
+  processTcpClient();
   processSerial();
 
   // Check if notify expired
