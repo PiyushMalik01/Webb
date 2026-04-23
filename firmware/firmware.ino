@@ -655,6 +655,7 @@ bool tjpg_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
 void displayJpeg(uint8_t *data, uint32_t len) {
   tft.fillScreen(TFT_BLACK);
   TJpgDec.setJpgScale(1);
+  TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(tjpg_output);
   TJpgDec.drawJpg(0, 0, data, len);
   displayMode = MODE_IMAGE;
@@ -872,6 +873,7 @@ void setup() {
   tft.fillScreen(TFT_BLACK);
 
   TJpgDec.setJpgScale(1);
+  TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(tjpg_output);
 
   // ── WiFi connect ──
