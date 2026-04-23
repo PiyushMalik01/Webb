@@ -21,6 +21,7 @@
 
 #include <SPI.h>
 #include <TFT_eSPI.h>
+#include <TJpg_Decoder.h>
 
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite spr = TFT_eSprite(&tft);
@@ -34,8 +35,13 @@ TFT_eSprite spr = TFT_eSprite(&tft);
 #define MODE_FACE      0
 #define MODE_DASHBOARD 1
 #define MODE_NOTIFY    2
+#define MODE_IMAGE     3
 
 int displayMode = MODE_FACE;
+
+// ── JPEG receive buffer ────────────────────────────────────
+#define JPEG_BUF_SIZE 20000
+uint8_t jpegBuf[JPEG_BUF_SIZE];
 
 // ── Serial buffer ───────────────────────────────────────────
 #define CMD_BUF_SIZE 256
@@ -543,6 +549,7 @@ void handleSerialCommand(String line) {
     int newMood = webbFaceToMood(payload);
     setMoodTargets(newMood);
     lookTX = lookTY = 0;
+    displayMode = MODE_FACE;
     Serial.println("OK:" + payload);
   }
   else if (cmdType == "TEXT") {
@@ -565,6 +572,7 @@ void handleSerialCommand(String line) {
     payload.toUpperCase();
     if (payload == "DASHBOARD") displayMode = MODE_DASHBOARD;
     else if (payload == "NOTIFY") displayMode = MODE_NOTIFY;
+    else if (payload == "IMAGE") displayMode = MODE_IMAGE;
     else displayMode = MODE_FACE;
     Serial.println("OK:MODE:" + payload);
   }
@@ -586,8 +594,77 @@ void handleSerialCommand(String line) {
   }
 }
 
+// ── JPEG decode callback ───────────────────────────────────
+
+bool tjpg_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
+  tft.pushImage(x, y, w, h, bitmap);
+  return true;
+}
+
+void displayJpeg(uint8_t *data, uint32_t len) {
+  tft.fillScreen(TFT_BLACK);
+  TJpgDec.setJpgScale(1);
+  TJpgDec.setCallback(tjpg_output);
+  TJpgDec.drawJpg(0, 0, data, len);
+  displayMode = MODE_IMAGE;
+  webbControlled = true;
+  lastSerialCmd = millis();
+}
+
 void processSerial() {
   while (Serial.available()) {
+    uint8_t peek = Serial.peek();
+
+    // Binary command: 0x10 = FULL_FRAME JPEG
+    if (peek == 0x10) {
+      Serial.read();  // consume command byte
+
+      // Read 4-byte big-endian length
+      uint8_t lenBuf[4];
+      unsigned long t0 = millis();
+      int got = 0;
+      while (got < 4 && (millis() - t0) < 2000) {
+        if (Serial.available()) {
+          lenBuf[got++] = Serial.read();
+        }
+      }
+      if (got < 4) {
+        Serial.println("ERR:IMG:TIMEOUT_LEN");
+        return;
+      }
+
+      uint32_t jpegLen = ((uint32_t)lenBuf[0] << 24) |
+                         ((uint32_t)lenBuf[1] << 16) |
+                         ((uint32_t)lenBuf[2] << 8)  |
+                         ((uint32_t)lenBuf[3]);
+
+      if (jpegLen > JPEG_BUF_SIZE) {
+        Serial.printf("ERR:IMG:TOO_BIG:%u\n", jpegLen);
+        while (jpegLen > 0 && (millis() - t0) < 10000) {
+          if (Serial.available()) { Serial.read(); jpegLen--; }
+        }
+        return;
+      }
+
+      // Read JPEG data
+      uint32_t received = 0;
+      t0 = millis();
+      while (received < jpegLen && (millis() - t0) < 5000) {
+        if (Serial.available()) {
+          jpegBuf[received++] = Serial.read();
+        }
+      }
+
+      if (received == jpegLen) {
+        displayJpeg(jpegBuf, jpegLen);
+        Serial.printf("OK:IMG:%u\n", jpegLen);
+      } else {
+        Serial.printf("ERR:IMG:SHORT:%u/%u\n", received, jpegLen);
+      }
+      return;
+    }
+
+    // Text command: accumulate until newline
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
       if (cmdIdx > 0) {
@@ -747,6 +824,9 @@ void setup() {
 
   tft.fillScreen(TFT_BLACK);
 
+  TJpgDec.setJpgScale(1);
+  TJpgDec.setCallback(tjpg_output);
+
   void *p = spr.createSprite(SPR_W, SPR_H);
   Serial.printf("Sprite: %s, heap: %d\n", p ? "OK" : "FAIL", ESP.getFreeHeap());
 
@@ -785,22 +865,24 @@ void loop() {
     return;
   }
 
-  tick();
-  updateAll();
-  render();
+  if (displayMode != MODE_IMAGE) {
+    tick();
+    updateAll();
+    render();
 
-  // Draw overlays on the TFT directly (outside sprite area)
-  switch (displayMode) {
-    case MODE_DASHBOARD:
-      drawDashboardOverlay();
-      break;
-    case MODE_NOTIFY:
-      drawNotifyOverlay();
-      break;
-    case MODE_FACE:
-    default:
-      drawTextOverlay();
-      break;
+    // Draw overlays on the TFT directly (outside sprite area)
+    switch (displayMode) {
+      case MODE_DASHBOARD:
+        drawDashboardOverlay();
+        break;
+      case MODE_NOTIFY:
+        drawNotifyOverlay();
+        break;
+      case MODE_FACE:
+      default:
+        drawTextOverlay();
+        break;
+    }
   }
 
   delay(16);
