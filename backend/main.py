@@ -23,6 +23,7 @@ from .voice_engine import start as start_voice, stop as stop_voice
 from . import activity_monitor, system_controller, ai_manager, streaming_tts, windows_api
 from .routes.activity import router as activity_router
 from .routes.system import router as system_router
+from .routes.display import router as display_router
 
 
 def create_app() -> FastAPI:
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
     app.include_router(activity_router, prefix="/api/activity", tags=["activity"])
     app.include_router(system_router, prefix="/api/system", tags=["system"])
+    app.include_router(display_router, prefix="/api/display", tags=["display"])
 
     @app.get("/health")
     def health() -> dict[str, str]:
