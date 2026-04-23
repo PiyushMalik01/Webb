@@ -38,13 +38,12 @@ def send_image(jpeg_bytes: bytes) -> None:
 
 
 def send_command(cmd: str) -> None:
-    """Send a text command (FACE:HAPPY, NOTIFY:Hello, etc.) via WiFi or serial."""
+    """Send a text command (FACE:HAPPY, NOTIFY:Hello, etc.) via WiFi TCP.
+    Raises if WiFi is unavailable — caller handles serial fallback."""
     host = _get_esp32_host()
-    if host:
-        _send_tcp(host, (cmd + "\n").encode("utf-8"))
-    else:
-        from ..serial_manager import get_serial_manager
-        get_serial_manager().send_command(cmd)
+    if not host:
+        raise RuntimeError("ESP32 WiFi host not found")
+    _send_tcp(host, (cmd + "\n").encode("utf-8"))
 
 
 def _send_tcp(host: str, data: bytes) -> None:
