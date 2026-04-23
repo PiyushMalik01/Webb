@@ -615,8 +615,11 @@ void processTcpClient() {
   while (client.connected()) {
     if (!client.available()) { delay(1); continue; }
 
-    uint8_t cmd = client.read();
+    uint8_t cmd = client.peek();
+
     if (cmd == 0x10) {
+      // Binary image frame
+      client.read();  // consume 0x10
       uint8_t lenBuf[4];
       if (client.readBytes(lenBuf, 4) != 4) {
         client.println("ERR:IMG:TIMEOUT_LEN");
@@ -638,6 +641,14 @@ void processTcpClient() {
         client.printf("OK:IMG:%u\n", jpegLen);
       } else {
         client.printf("ERR:IMG:SHORT:%u/%u\n", (uint32_t)received, jpegLen);
+      }
+    } else {
+      // Text command (FACE:HAPPY, NOTIFY:Hello, etc.)
+      String line = client.readStringUntil('\n');
+      line.trim();
+      if (line.length() > 0) {
+        handleSerialCommand(line);
+        client.println("OK:TCP");
       }
     }
     break;

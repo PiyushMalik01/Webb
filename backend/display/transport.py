@@ -37,6 +37,16 @@ def send_image(jpeg_bytes: bytes) -> None:
         _send_serial(header, jpeg_bytes)
 
 
+def send_command(cmd: str) -> None:
+    """Send a text command (FACE:HAPPY, NOTIFY:Hello, etc.) via WiFi or serial."""
+    host = _get_esp32_host()
+    if host:
+        _send_tcp(host, (cmd + "\n").encode("utf-8"))
+    else:
+        from ..serial_manager import get_serial_manager
+        get_serial_manager().send_command(cmd)
+
+
 def _send_tcp(host: str, data: bytes) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(TCP_TIMEOUT)

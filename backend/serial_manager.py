@@ -88,9 +88,13 @@ class SerialManager:
             self._disconnect_locked()
 
     def send_command(self, cmd: str) -> None:
-        """Send an arbitrary rich-protocol command (e.g. ``FACE:HAPPY``,
-        ``TEXT:1:Hello``) over serial.  The command is transmitted as-is
-        with a trailing newline."""
+        """Send a text command via WiFi TCP (preferred) or serial fallback."""
+        try:
+            from .display.transport import send_command as wifi_send
+            wifi_send(cmd)
+            return
+        except Exception:
+            pass
         with self._lock:
             if self._ser is None or not self._ser.is_open:
                 raise RuntimeError("Serial not connected")
@@ -109,6 +113,15 @@ class SerialManager:
         face = face.strip().upper()
         if face not in FACES:
             raise ValueError(f"Unknown face: {face}")
+
+        try:
+            from .display.transport import send_command as wifi_send
+            wifi_send(f"FACE:{face}")
+            self._last_face = face
+            self._last_error = None
+            return
+        except Exception:
+            pass
 
         with self._lock:
             if self._ser is None or not self._ser.is_open:
