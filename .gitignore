@@ -22,3 +22,10 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 *.log
+
+## Claude
+.claude/
+CLAUDE.md
+
+## Spotify
+.spotify_token.json

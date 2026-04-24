@@ -390,7 +390,7 @@ def register_all_actions() -> None:
 
     r("close_window", "Close the active window",
       {"type": "object", "properties": {}},
-      lambda: close_active(), "yellow", "windows")
+      lambda: close_active(), "green", "windows")
 
     r("show_desktop", "Show the desktop (minimize all windows)",
       {"type": "object", "properties": {}},
@@ -416,7 +416,7 @@ def register_all_actions() -> None:
 
     r("lock_screen", "Lock the computer screen",
       {"type": "object", "properties": {}},
-      lambda: lock_screen(), "yellow", "system")
+      lambda: lock_screen(), "green", "system")
 
     r("brightness", "Control screen brightness: up, down, or a percentage",
       {"type": "object", "properties": {

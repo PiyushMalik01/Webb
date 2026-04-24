@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -24,10 +25,12 @@ from . import activity_monitor, system_controller, ai_manager, streaming_tts, wi
 from .routes.activity import router as activity_router
 from .routes.system import router as system_router
 from .routes.display import router as display_router
+from .routes.spotify import router as spotify_router
+from . import spotify_player
 
 
 def create_app() -> FastAPI:
-    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
     app = FastAPI(title="Webb Backend", version="0.1.0")
 
@@ -58,6 +61,7 @@ def create_app() -> FastAPI:
         ai_manager.register_task_actions()
         activity_monitor.start()
         start_voice()
+        spotify_player.start()
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
@@ -69,6 +73,7 @@ def create_app() -> FastAPI:
             except asyncio.CancelledError:
                 pass
         stop_voice()
+        spotify_player.stop()
         activity_monitor.stop()
         streaming_tts.shutdown()
         idle_manager.stop()
@@ -84,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(activity_router, prefix="/api/activity", tags=["activity"])
     app.include_router(system_router, prefix="/api/system", tags=["system"])
     app.include_router(display_router, prefix="/api/display", tags=["display"])
+    app.include_router(spotify_router, prefix="/api/spotify", tags=["spotify"])
 
     @app.get("/health")
     def health() -> dict[str, str]:

@@ -115,6 +115,27 @@ class SerialManager:
             raise ValueError(f"Unknown face: {face}")
 
         try:
+            from .display.gif_player import is_playing
+            if is_playing():
+                return
+        except ImportError:
+            pass
+
+        try:
+            from .spotify_player import is_active
+            if is_active():
+                return
+        except ImportError:
+            pass
+
+        try:
+            from .display.idle_player import is_playing as idle_is_playing
+            if idle_is_playing():
+                return
+        except ImportError:
+            pass
+
+        try:
             from .display.transport import send_command as wifi_send
             wifi_send(f"FACE:{face}")
             self._last_face = face

@@ -50,7 +50,7 @@ WiFiServer imgServer(IMG_TCP_PORT);
 int displayMode = MODE_FACE;
 
 // ── JPEG receive buffer ────────────────────────────────────
-#define JPEG_BUF_SIZE 20000
+#define JPEG_BUF_SIZE 40000
 uint8_t jpegBuf[JPEG_BUF_SIZE];
 
 // ── Serial buffer ───────────────────────────────────────────
@@ -651,7 +651,6 @@ void processTcpClient() {
         client.println("OK:TCP");
       }
     }
-    break;
   }
   client.stop();
 }
@@ -664,7 +663,7 @@ bool tjpg_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
 }
 
 void displayJpeg(uint8_t *data, uint32_t len) {
-  tft.fillScreen(TFT_BLACK);
+  if (displayMode != MODE_IMAGE) tft.fillScreen(TFT_BLACK);
   TJpgDec.setJpgScale(1);
   TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(tjpg_output);
@@ -887,7 +886,12 @@ void setup() {
   TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(tjpg_output);
 
-  // ── WiFi connect ──
+  // ── WiFi connect (static IP) ──
+  IPAddress staticIP(172, 16, 212, 200);
+  IPAddress gateway(172, 16, 208, 1);
+  IPAddress subnet(255, 255, 240, 0);
+  IPAddress dns(8, 8, 8, 8);
+  WiFi.config(staticIP, gateway, subnet, dns);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);

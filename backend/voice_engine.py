@@ -31,6 +31,8 @@ class VoiceState(str, Enum):
 _state = VoiceState.IDLE
 _state_lock = threading.Lock()
 _stop_event = threading.Event()
+_listening_paused = False
+_listening_paused_lock = threading.Lock()
 _follow_up_deadline: float = 0.0
 
 # Audio delivery from AudioEngine
@@ -50,6 +52,25 @@ _manual_mode = False
 def get_state() -> VoiceState:
     with _state_lock:
         return _state
+
+
+def is_listening_paused() -> bool:
+    with _listening_paused_lock:
+        return _listening_paused
+
+
+def pause_listening() -> None:
+    global _listening_paused
+    with _listening_paused_lock:
+        _listening_paused = True
+    _log("[voice] Passive listening paused")
+
+
+def resume_listening() -> None:
+    global _listening_paused
+    with _listening_paused_lock:
+        _listening_paused = False
+    _log("[voice] Passive listening resumed")
 
 
 def _set_state(new_state: VoiceState) -> None:
@@ -161,8 +182,10 @@ def _on_speech(audio: np.ndarray) -> None:
         _manual_event.set()
         return
 
-    # Normal passive mode: queue for processing
+    # Normal passive mode: queue for processing (skip if paused)
     if current in (VoiceState.IDLE, VoiceState.FOLLOW_UP):
+        if is_listening_paused():
+            return
         with _speech_lock:
             _speech_queue.clear()
             _speech_queue.append(audio)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiGet } from '../lib/api'
+import { apiGet, apiSend } from '../lib/api'
 import type { Task, TimerStatus, Reminder, VoiceStatus } from '../lib/types'
 import { WebbPreview } from '../components/WebbPreview'
 
@@ -10,11 +10,13 @@ export function DashboardPage() {
   const [timer, setTimer] = useState<TimerStatus>({ state: 'idle', seconds_remaining: 0, duration_seconds: 0 })
   const [reminders, setReminders] = useState<Reminder[]>([])
   const [voiceState, setVoiceState] = useState<string>('idle')
+  const [listening, setListening] = useState(true)
 
   useEffect(() => {
     apiGet<Task[]>('/api/tasks/').then(setTasks).catch(() => {})
     apiGet<TimerStatus>('/api/timer/status').then(setTimer).catch(() => {})
     apiGet<Reminder[]>('/api/reminders/').then(setReminders).catch(() => {})
+    apiGet<{ listening: boolean }>('/api/voice/listening').then(s => setListening(s.listening)).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -23,6 +25,13 @@ export function DashboardPage() {
     }, 1000)
     return () => clearInterval(poll)
   }, [])
+
+  const toggleListening = () => {
+    apiSend<{ listening: boolean }>('/api/voice/listening', {
+      method: 'POST',
+      body: { listening: !listening },
+    }).then(s => setListening(s.listening)).catch(() => {})
+  }
 
   const activeTasks = tasks.filter((t) => !t.completed).length
   const timerText = timer.state === 'running'
@@ -87,6 +96,13 @@ export function DashboardPage() {
         </button>
         <button onClick={() => navigate('/timer')} className="btn-ghost px-5 py-2.5 text-sm">
           Start timer
+        </button>
+        <button
+          onClick={toggleListening}
+          className={`px-5 py-2.5 text-sm ${listening ? 'btn-primary' : 'btn-ghost'}`}
+          title={listening ? 'Pause passive listening' : 'Resume passive listening'}
+        >
+          {listening ? 'Listening' : 'Paused'}
         </button>
       </div>
     </div>

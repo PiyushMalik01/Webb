@@ -5,7 +5,7 @@ import socket
 import struct
 
 CMD_FULL_FRAME = 0x10
-MAX_JPEG_SIZE = 20_000
+MAX_JPEG_SIZE = 40_000
 TCP_PORT = 3456
 TCP_TIMEOUT = 5.0
 

@@ -19,6 +19,9 @@ from .fast_path import try_fast_path
 
 _client: Optional[OpenAI] = None
 
+# Pending actions waiting for user confirmation
+_pending_actions: List[Dict[str, Any]] = []
+
 
 def _get_client() -> OpenAI:
     global _client
@@ -35,9 +38,40 @@ def process_message(text: str) -> Dict[str, Any]:
     Process a user message. Tries fast path first, then LLM with function calling.
     Returns: {"speak": str, "actions": list, "face": str, "action_results": list}
     """
+    global _pending_actions
     text = text.strip()
     if not text:
         return _result("I didn't catch that.", face="IDLE")
+
+    # 0. Check if user is confirming a pending action
+    if _pending_actions:
+        lower = text.lower().strip()
+        yes_words = {"yes", "yeah", "yep", "sure", "do it", "go ahead", "ok", "okay", "confirm", "y"}
+        no_words = {"no", "nah", "nope", "cancel", "don't", "stop", "n", "never mind"}
+
+        if any(w in lower for w in yes_words):
+            # Execute all pending actions
+            results = []
+            for pa in _pending_actions:
+                # Force execute by bypassing safety (user confirmed)
+                action = action_registry.get(pa["name"])
+                if action:
+                    try:
+                        result = action.fn(**pa["params"])
+                        results.append({"name": pa["name"], "result": result})
+                    except Exception as e:
+                        results.append({"name": pa["name"], "result": f"Failed: {e}"})
+            _pending_actions.clear()
+            speak = "; ".join(r["result"] for r in results) or "Done."
+            conversation.add_user(text)
+            conversation.add_assistant(speak)
+            return _result(speak, action_results=results)
+
+        if any(w in lower for w in no_words):
+            _pending_actions.clear()
+            conversation.add_user(text)
+            conversation.add_assistant("Okay, cancelled.")
+            return _result("Okay, cancelled.", face="IDLE")
 
     # 1. Try fast path (instant, no API call)
     fast = try_fast_path(text)
@@ -89,11 +123,14 @@ def process_message(text: str) -> Dict[str, Any]:
                 "needs_confirmation": res.get("needs_confirmation", False),
             })
 
-        # If any action needs confirmation, ask the user
+        # If any action needs confirmation, store them and ask the user
         pending = [a for a in action_results if a.get("needs_confirmation")]
         if pending:
-            names = ", ".join(a["name"] for a in pending)
-            speak = f"Should I go ahead and {names}?"
+            _pending_actions.clear()
+            for a in pending:
+                _pending_actions.append({"name": a["name"], "params": a.get("params", {})})
+            descriptions = ", ".join(a["name"].replace("_", " ") for a in pending)
+            speak = f"Should I go ahead and {descriptions}?"
             conversation.add_user(text)
             conversation.add_assistant(speak)
             return _result(speak, action_results=action_results, face="IDLE")
