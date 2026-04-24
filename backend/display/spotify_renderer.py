@@ -46,7 +46,7 @@ def _get_spotify_icon() -> Image.Image | None:
     global _spotify_icon
     if _spotify_icon is not None:
         return _spotify_icon
-    icon_path = Path(__file__).parent / "spotify_icon.png"
+    icon_path = Path(__file__).resolve().parent.parent.parent / "frontend" / "src" / "assets" / "spotify icon.png"
     if icon_path.exists():
         _spotify_icon = Image.open(icon_path).convert("RGBA")
     return _spotify_icon
@@ -334,13 +334,14 @@ def _build_base(theme: dict, name: str, artist: str, album: str,
                            radius=8, fill=theme["card"])
 
     icon = _get_spotify_icon()
+    icon_size = 18
     if icon:
-        icon_resized = icon.resize((12, 12), Image.NEAREST)
-        img.paste(icon_resized, (c2_x + 8, c2_y + 6), icon_resized)
+        icon_resized = icon.resize((icon_size, icon_size), Image.BILINEAR)
+        img.paste(icon_resized, (c2_x + c2_w - icon_size - 6, c2_y + 6), icon_resized)
         draw = ImageDraw.Draw(img)
 
     text_pad = 8
-    text_max_w = c2_w - text_pad * 2
+    text_max_w = c2_w - text_pad - icon_size - 10
     draw.text((c2_x + text_pad, c2_y + 22), name[:30],
               fill=theme["text"], font=_FONT_TITLE)
     draw.text((c2_x + text_pad, c2_y + 38), artist[:30],
