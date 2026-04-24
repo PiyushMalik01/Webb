@@ -334,10 +334,10 @@ def _build_base(theme: dict, name: str, artist: str, album: str,
                            radius=8, fill=theme["card"])
 
     icon = _get_spotify_icon()
-    icon_size = 18
+    icon_size = 30
     if icon:
-        icon_resized = icon.resize((icon_size, icon_size), Image.BILINEAR)
-        img.paste(icon_resized, (c2_x + c2_w - icon_size - 6, c2_y + 6), icon_resized)
+        icon_resized = icon.resize((icon_size, icon_size), Image.LANCZOS)
+        img.paste(icon_resized, (c2_x + c2_w - icon_size - 5, c2_y + (c2_h - icon_size) // 2), icon_resized)
         draw = ImageDraw.Draw(img)
 
     text_pad = 8
