@@ -25,13 +25,21 @@ _element_frames: list[Image.Image] | None = None
 _element_index: int = 0
 _element_size: tuple[int, int] = (0, 0)
 
-# caches to avoid re-rendering every frame
 _cached_vinyl: dict[str, Image.Image] = {}
 _cached_album_card: dict[str, Image.Image] = {}
 _el_mask_cache: dict[tuple[int, int], Image.Image] = {}
 
+# base layer cache — static parts rendered once per track
+_base_layer: Image.Image | None = None
+_base_track_key: str = ""
+_base_theme_key: str = ""
+
+# layout constants
 SWITCH_FRAMES = 40
 ELEMENT_VIDEO = Path(__file__).resolve().parent.parent.parent / "frontend" / "src" / "assets" / "playerelement.mp4"
+
+C1_X, C1_Y, C1_SIZE, C1_PAD = 6, 6, 118, 3
+C1_INNER = C1_SIZE - C1_PAD * 2
 
 
 def _get_spotify_icon() -> Image.Image | None:
@@ -45,8 +53,9 @@ def _get_spotify_icon() -> Image.Image | None:
 
 
 def set_theme(theme: str) -> None:
-    global _theme
+    global _theme, _base_layer
     _theme = theme
+    _base_layer = None
 
 
 def get_theme() -> str:
@@ -109,7 +118,6 @@ def _font_regular(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-# pre-load fonts once
 _FONT_TITLE = _font_bold(13)
 _FONT_ARTIST = _font_regular(10)
 _FONT_ALBUM = _font_regular(8)
@@ -177,7 +185,6 @@ def _draw_equalizer(draw: ImageDraw.Draw, x: int, y: int, w: int, h: int,
 
 def _get_vinyl(art: Image.Image | None, size: int, angle: float,
                theme: dict) -> Image.Image:
-    # quantize angle to reduce re-renders
     q_angle = int(angle / 4) * 4
     key = f"{id(art)}_{size}_{q_angle}_{_theme}"
     if key in _cached_vinyl:
@@ -204,7 +211,6 @@ def _get_vinyl(art: Image.Image | None, size: int, angle: float,
     draw.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=theme["vinyl_hole"])
     draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=theme["vinyl_rim"], width=1)
 
-    # keep cache small
     if len(_cached_vinyl) > 30:
         _cached_vinyl.clear()
     _cached_vinyl[key] = disc
@@ -269,9 +275,102 @@ def _load_element_frames(card_w: int, card_h: int) -> list[Image.Image]:
     return frames
 
 
+def _compute_layout(theme: dict) -> dict:
+    """Compute all card positions once."""
+    c2_x = C1_X + C1_SIZE + 5
+    c2_y = C1_Y
+    c2_w = DISPLAY_W - c2_x - 6
+    c2_h = 68
+    c3_x = c2_x
+    c3_y = c2_y + c2_h + 4
+    c3_w = c2_w
+    c3_h = C1_SIZE - c2_h - 4
+    bottom_y = C1_Y + C1_SIZE + 4
+    bottom_h = DISPLAY_H - bottom_y - 6
+    c5_h = bottom_h
+    c5_w = max(50, int(c5_h * 0.56) + 4)
+    c5_x = DISPLAY_W - c5_w - 6
+    c5_y = bottom_y
+    c4_x = 6
+    c4_y = bottom_y
+    c4_w = c5_x - c4_x - 4
+    c4_h = bottom_h
+    return {
+        "c2": (c2_x, c2_y, c2_w, c2_h),
+        "c3": (c3_x, c3_y, c3_w, c3_h),
+        "c4": (c4_x, c4_y, c4_w, c4_h),
+        "c5": (c5_x, c5_y, c5_w, c5_h),
+        "bottom_y": bottom_y, "bottom_h": bottom_h,
+        "el_pad": 2,
+    }
+
+
+_layout: dict | None = None
+
+
+def _get_layout(theme: dict) -> dict:
+    global _layout
+    if _layout is None:
+        _layout = _compute_layout(theme)
+    return _layout
+
+
+def _build_base(theme: dict, name: str, artist: str, album: str,
+                art: Image.Image | None) -> Image.Image:
+    """Render all static parts: background, card shapes, text, icon, album card."""
+    lay = _get_layout(theme)
+    img = Image.new("RGB", (DISPLAY_W, DISPLAY_H), theme["bg"])
+    draw = ImageDraw.Draw(img)
+
+    # card 1 background
+    draw.rounded_rectangle(
+        [C1_X, C1_Y, C1_X + C1_SIZE, C1_Y + C1_SIZE],
+        radius=10, fill=theme["card"],
+    )
+
+    # card 2 — track info
+    c2_x, c2_y, c2_w, c2_h = lay["c2"]
+    draw.rounded_rectangle([c2_x, c2_y, c2_x + c2_w, c2_y + c2_h],
+                           radius=8, fill=theme["card"])
+
+    icon = _get_spotify_icon()
+    if icon:
+        icon_resized = icon.resize((12, 12), Image.NEAREST)
+        img.paste(icon_resized, (c2_x + 8, c2_y + 6), icon_resized)
+        draw = ImageDraw.Draw(img)
+
+    text_pad = 8
+    text_max_w = c2_w - text_pad * 2
+    draw.text((c2_x + text_pad, c2_y + 22), name[:30],
+              fill=theme["text"], font=_FONT_TITLE)
+    draw.text((c2_x + text_pad, c2_y + 38), artist[:30],
+              fill=theme["sub"], font=_FONT_ARTIST)
+    if album:
+        draw.text((c2_x + text_pad, c2_y + 53), album[:30],
+                  fill=theme["dim"], font=_FONT_ALBUM)
+
+    # card 3 background
+    c3_x, c3_y, c3_w, c3_h = lay["c3"]
+    draw.rounded_rectangle([c3_x, c3_y, c3_x + c3_w, c3_y + c3_h],
+                           radius=8, fill=theme["card"])
+
+    # card 5 background
+    c5_x, c5_y, c5_w, c5_h = lay["c5"]
+    draw.rounded_rectangle([c5_x, c5_y, c5_x + c5_w, c5_y + c5_h],
+                           radius=8, fill=theme["card"])
+
+    # card 4 background
+    c4_x, c4_y, c4_w, c4_h = lay["c4"]
+    draw.rounded_rectangle([c4_x, c4_y, c4_x + c4_w, c4_y + c4_h],
+                           radius=8, fill=theme["card"])
+
+    return img
+
+
 def render_spotify_card(track: dict[str, Any]) -> bytes:
     global _rotation_angle, _frame_count, _scroll_offset
     global _element_frames, _element_index, _element_size
+    global _base_layer, _base_track_key, _base_theme_key
 
     name = track.get("name", "Unknown")
     artist = track.get("artist", "Unknown")
@@ -282,8 +381,7 @@ def render_spotify_card(track: dict[str, Any]) -> bytes:
     art_url = track.get("art_url", "")
 
     theme = _t()
-    img = Image.new("RGB", (DISPLAY_W, DISPLAY_H), theme["bg"])
-    draw = ImageDraw.Draw(img)
+    lay = _get_layout(theme)
 
     art = None
     accent = theme["accent"]
@@ -301,121 +399,64 @@ def render_spotify_card(track: dict[str, Any]) -> bytes:
 
     _update_eq_bars(is_playing)
 
-    # ── CARD 1: Album art / Vinyl (left) ──
-    card1_x, card1_y = 6, 6
-    card1_size = 118
-    card1_pad = 3
+    # rebuild base layer only when track or theme changes
+    track_key = f"{name}_{artist}_{album}_{art_url}"
+    if _base_layer is None or _base_track_key != track_key or _base_theme_key != _theme:
+        _base_layer = _build_base(theme, name, artist, album, art)
+        _base_track_key = track_key
+        _base_theme_key = _theme
 
-    draw.rounded_rectangle(
-        [card1_x, card1_y, card1_x + card1_size, card1_y + card1_size],
-        radius=10, fill=theme["card"],
-    )
+    # start from cached base
+    img = _base_layer.copy()
+    draw = ImageDraw.Draw(img)
 
+    # ── DYNAMIC: Card 1 content (vinyl or album art) ──
     show_vinyl = (_frame_count // SWITCH_FRAMES) % 2 == 0
-    inner_size = card1_size - card1_pad * 2
-
     if show_vinyl:
-        disc = _get_vinyl(art, inner_size, _rotation_angle, theme)
-        img.paste(disc, (card1_x + card1_pad, card1_y + card1_pad))
+        disc = _get_vinyl(art, C1_INNER, _rotation_angle, theme)
+        img.paste(disc, (C1_X + C1_PAD, C1_Y + C1_PAD))
     elif art:
-        card_art = _get_album_card(art, inner_size)
-        img.paste(card_art, (card1_x + card1_pad, card1_y + card1_pad))
+        card_art = _get_album_card(art, C1_INNER)
+        img.paste(card_art, (C1_X + C1_PAD, C1_Y + C1_PAD))
 
     draw = ImageDraw.Draw(img)
 
-    # ── CARD 2: Track info (top right) ──
-    card2_x = card1_x + card1_size + 5
-    card2_y = card1_y
-    card2_w = DISPLAY_W - card2_x - 6
-    card2_h = 68
+    # ── DYNAMIC: Card 3 equalizer ──
+    c3_x, c3_y, c3_w, c3_h = lay["c3"]
+    draw.rounded_rectangle([c3_x, c3_y, c3_x + c3_w, c3_y + c3_h],
+                           radius=8, fill=theme["card"])
+    _draw_equalizer(draw, c3_x + 8, c3_y + 5, c3_w - 16, c3_h - 10, theme)
 
-    draw.rounded_rectangle(
-        [card2_x, card2_y, card2_x + card2_w, card2_y + card2_h],
-        radius=8, fill=theme["card"],
-    )
-
-    icon = _get_spotify_icon()
-    if icon:
-        icon_resized = icon.resize((12, 12), Image.NEAREST)
-        img.paste(icon_resized, (card2_x + 8, card2_y + 6), icon_resized)
-        draw = ImageDraw.Draw(img)
-
-    text_pad = 8
-    text_max_w = card2_w - text_pad * 2
-
-    draw.text((card2_x + text_pad, card2_y + 22),
-              _scroll_text(name, _FONT_TITLE, text_max_w, _scroll_offset),
-              fill=theme["text"], font=_FONT_TITLE)
-    draw.text((card2_x + text_pad, card2_y + 38),
-              _scroll_text(artist, _FONT_ARTIST, text_max_w, _scroll_offset),
-              fill=theme["sub"], font=_FONT_ARTIST)
-    if album:
-        draw.text((card2_x + text_pad, card2_y + 53),
-                  _scroll_text(album, _FONT_ALBUM, text_max_w, _scroll_offset),
-                  fill=theme["dim"], font=_FONT_ALBUM)
-
-    # ── CARD 3: Equalizer (bottom right) ──
-    card3_x = card2_x
-    card3_y = card2_y + card2_h + 4
-    card3_w = card2_w
-    card3_h = card1_size - card2_h - 4
-
-    draw.rounded_rectangle(
-        [card3_x, card3_y, card3_x + card3_w, card3_y + card3_h],
-        radius=8, fill=theme["card"],
-    )
-    _draw_equalizer(draw, card3_x + 8, card3_y + 5, card3_w - 16, card3_h - 10, theme)
-
-    # ── Bottom row: Progress (left) + Element video (right) ──
-    bottom_y = card1_y + card1_size + 4
-    bottom_h = DISPLAY_H - bottom_y - 6
-
-    # CARD 5: Element video (right) — sized to match video's portrait ratio
-    card5_h = bottom_h
-    card5_w = max(50, int(card5_h * 0.56) + 4)  # match 720:1280 ratio + padding
-    card5_x = DISPLAY_W - card5_w - 6
-    card5_y = bottom_y
-
-    draw.rounded_rectangle(
-        [card5_x, card5_y, card5_x + card5_w, card5_y + card5_h],
-        radius=8, fill=theme["card"],
-    )
-
-    el_pad = 2
-    el_w = card5_w - el_pad * 2
-    el_h = card5_h - el_pad * 2
+    # ── DYNAMIC: Card 5 element video ──
+    c5_x, c5_y, c5_w, c5_h = lay["c5"]
+    el_pad = lay["el_pad"]
+    el_w = c5_w - el_pad * 2
+    el_h = c5_h - el_pad * 2
     if (_element_frames is None or _element_size != (el_w, el_h)) and ELEMENT_VIDEO.exists():
         _element_frames = _load_element_frames(el_w, el_h)
         _element_size = (el_w, el_h)
     if _element_frames:
         el_frame = _element_frames[_element_index % len(_element_frames)]
-        img.paste(el_frame, (card5_x + el_pad, card5_y + el_pad), _get_el_mask(el_w, el_h))
+        img.paste(el_frame, (c5_x + el_pad, c5_y + el_pad), _get_el_mask(el_w, el_h))
         draw = ImageDraw.Draw(img)
         if is_playing:
             _element_index += 1
 
-    # CARD 4: Progress (left)
-    card4_x = 6
-    card4_y = bottom_y
-    card4_w = card5_x - card4_x - 4
-    card4_h = bottom_h
-
-    draw.rounded_rectangle(
-        [card4_x, card4_y, card4_x + card4_w, card4_y + card4_h],
-        radius=8, fill=theme["card"],
-    )
+    # ── DYNAMIC: Card 4 progress wave ──
+    c4_x, c4_y, c4_w, c4_h = lay["c4"]
+    draw.rounded_rectangle([c4_x, c4_y, c4_x + c4_w, c4_y + c4_h],
+                           radius=8, fill=theme["card"])
 
     wave_pad = 10
-    bar_y = card4_y + card4_h // 2 - 1
-    bar_x0 = card4_x + wave_pad
-    bar_x1 = card4_x + card4_w - wave_pad
+    bar_y = c4_y + c4_h // 2 - 1
+    bar_x0 = c4_x + wave_pad
+    bar_x1 = c4_x + c4_w - wave_pad
     bar_w = bar_x1 - bar_x0
 
     progress = min(progress_ms / max(duration_ms, 1), 1.0)
     fill_x = bar_x0 + int(bar_w * progress)
     wave_phase = _frame_count * 0.4
 
-    # simplified wave — draw as line segments
     draw.line([(bar_x0, bar_y + 1), (bar_x1, bar_y + 1)], fill=theme["wave_bg"], width=2)
     if fill_x > bar_x0 + 2:
         points = []
@@ -434,7 +475,7 @@ def render_spotify_card(track: dict[str, Any]) -> bytes:
     draw.text((bar_x1, bar_y + 7), _format_time(duration_ms),
               fill=theme["time"], font=_FONT_TIME, anchor="ra")
 
-    return image_to_jpeg(img, quality=85)
+    return image_to_jpeg(img, quality=70)
 
 
 def _format_time(ms: int) -> str:
