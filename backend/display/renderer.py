@@ -60,9 +60,9 @@ def render_test_card() -> Image.Image:
 
 
 def image_to_jpeg(img: Image.Image, quality: int = 60) -> bytes:
-    """Convert a PIL Image to JPEG bytes."""
+    """Convert a PIL Image to JPEG bytes. Uses 4:4:4 subsampling for crisp text."""
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=quality)
+    img.convert("RGB").save(buf, format="JPEG", quality=quality, subsampling=0)
     return buf.getvalue()
 
 

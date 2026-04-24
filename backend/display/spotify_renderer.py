@@ -475,7 +475,7 @@ def render_spotify_card(track: dict[str, Any]) -> bytes:
     draw.text((bar_x1, bar_y + 7), _format_time(duration_ms),
               fill=theme["time"], font=_FONT_TIME, anchor="ra")
 
-    return image_to_jpeg(img, quality=70)
+    return image_to_jpeg(img, quality=78)
 
 
 def _format_time(ms: int) -> str:

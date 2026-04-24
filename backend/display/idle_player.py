@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+import socket
+import struct
 import threading
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 import cv2
 from PIL import Image
 
-from .renderer import resize_for_display, image_to_jpeg
-from .transport import send_image
+from .renderer import image_to_jpeg
+from .transport import send_image, _get_esp32_host, CMD_FULL_FRAME, TCP_PORT
 from .gif_player import is_playing as gif_is_playing
 
 IDLE_VIDEO = Path(__file__).resolve().parent.parent.parent / "frontend" / "src" / "assets" / "idlestate.mp4"
 FRAME_INTERVAL = 0.12
-JPEG_QUALITY = 80
+JPEG_QUALITY = 78
 
 _lock = threading.Lock()
 _stop_event = threading.Event()
@@ -44,8 +46,7 @@ def _extract_frames() -> List[bytes]:
         if idx % skip == 0:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
-            # fit inside 320x240 with black letterbox
-            pil_img.thumbnail((320, 240), Image.LANCZOS)
+            pil_img.thumbnail((320, 240), Image.BILINEAR)
             canvas = Image.new("RGB", (320, 240), (0, 0, 0))
             ox = (320 - pil_img.width) // 2
             oy = (240 - pil_img.height) // 2
@@ -59,9 +60,18 @@ def _extract_frames() -> List[bytes]:
     return frames
 
 
+def _send_persistent(sock: socket.socket, jpeg: bytes) -> None:
+    header = struct.pack(">BI", CMD_FULL_FRAME, len(jpeg))
+    sock.sendall(header + jpeg)
+    resp = sock.recv(64).decode("utf-8", errors="ignore").strip()
+    if not resp.startswith("OK"):
+        raise RuntimeError(f"ESP32: {resp}")
+
+
 def _playback_loop() -> None:
     global _playing, _frames
     _playing = True
+    sock: socket.socket | None = None
     try:
         if _frames is None:
             _frames = _extract_frames()
@@ -73,15 +83,41 @@ def _playback_loop() -> None:
                 if _stop_event.is_set():
                     return
                 if gif_is_playing():
+                    if sock:
+                        sock.close()
+                        sock = None
                     _stop_event.wait(1)
                     continue
                 try:
-                    send_image(jpeg)
+                    t0 = time.monotonic()
+                    if sock is None:
+                        host = _get_esp32_host()
+                        if host:
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(5.0)
+                            sock.connect((host, TCP_PORT))
+                    if sock:
+                        try:
+                            _send_persistent(sock, jpeg)
+                        except Exception:
+                            sock.close()
+                            sock = None
+                            send_image(jpeg)
+                    else:
+                        send_image(jpeg)
+                    elapsed = time.monotonic() - t0
+                    remaining = FRAME_INTERVAL - elapsed
+                    if remaining > 0:
+                        _stop_event.wait(remaining)
                 except Exception as e:
                     print(f"[idle] send error: {e}")
-                    return
-                _stop_event.wait(FRAME_INTERVAL)
+                    if sock:
+                        sock.close()
+                        sock = None
+                    _stop_event.wait(FRAME_INTERVAL)
     finally:
+        if sock:
+            sock.close()
         _playing = False
 
 
